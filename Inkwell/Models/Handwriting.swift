@@ -53,9 +53,11 @@ enum CharsetGroup: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
-/// A user handwriting ("hand"): metadata + which characters are drawn/skipped.
-/// Glyph stroke data lives in `glyphs/<unicode-hex>.drawing` next to hand.json.
-struct HandwritingSet: Identifiable, Hashable, Codable {
+/// A user handwriting ("hand"): metadata + which characters are drawn/skipped
+/// and how many variations each character has. Glyph stroke data lives in
+/// `glyphs/<unicode-hex>.drawing` (variant 0) and `glyphs/<hex>-v<n>.drawing`
+/// (variants ≥ 1) next to hand.json.
+struct HandwritingSet: Identifiable, Hashable {
     let id: UUID
     var name: String
     var createdAt: Date
@@ -63,16 +65,39 @@ struct HandwritingSet: Identifiable, Hashable, Codable {
     var spaceWidth: Double = 0.35          // fraction of glyph cell width
     var doneCharacters: [String] = []
     var skippedCharacters: [String] = []
+    var variantCounts: [String: Int] = [:] // per character; defaults to 1 when done
 
     var doneCount: Int { doneCharacters.count }
     var totalCount: Int { CharsetGroup.allCharacters.count }
 
     func isDone(_ character: String) -> Bool { doneCharacters.contains(character) }
     func isSkipped(_ character: String) -> Bool { skippedCharacters.contains(character) }
+    func variantCount(_ character: String) -> Int {
+        variantCounts[character] ?? (isDone(character) ? 1 : 0)
+    }
+}
+
+extension HandwritingSet: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case id, name, createdAt, updatedAt, spaceWidth
+        case doneCharacters, skippedCharacters, variantCounts
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        updatedAt = try c.decode(Date.self, forKey: .updatedAt)
+        spaceWidth = try c.decodeIfPresent(Double.self, forKey: .spaceWidth) ?? 0.35
+        doneCharacters = try c.decodeIfPresent([String].self, forKey: .doneCharacters) ?? []
+        skippedCharacters = try c.decodeIfPresent([String].self, forKey: .skippedCharacters) ?? []
+        variantCounts = try c.decodeIfPresent([String: Int].self, forKey: .variantCounts) ?? [:]
+    }
 }
 
 /// A rendered output: typed text in a chosen hand, on a background.
-struct HandDocument: Identifiable, Hashable, Codable {
+struct HandDocument: Identifiable, Hashable {
     let id: UUID
     var name: String
     var handID: UUID
@@ -83,6 +108,36 @@ struct HandDocument: Identifiable, Hashable, Codable {
     var letterSpacing: Double = 2
     var sizeMultiplier: Double = 1
     var inkColorIndex: Int = 0
+    var leftMargin: Double = 48             // "line start"
+    var firstBaseline: Double = 90          // baseline of the first line from top
+    var variationSeed: Int = 0              // + shuffle → re-picks glyph variants
     var createdAt: Date
     var updatedAt: Date
+}
+
+extension HandDocument: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case id, name, handID, text, usesBackgroundImage, template
+        case lineSpacing, letterSpacing, sizeMultiplier, inkColorIndex
+        case leftMargin, firstBaseline, variationSeed, createdAt, updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        handID = try c.decode(UUID.self, forKey: .handID)
+        text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+        usesBackgroundImage = try c.decodeIfPresent(Bool.self, forKey: .usesBackgroundImage) ?? false
+        template = try c.decodeIfPresent(PaperTemplate.self, forKey: .template) ?? .lined
+        lineSpacing = try c.decodeIfPresent(Double.self, forKey: .lineSpacing) ?? 90
+        letterSpacing = try c.decodeIfPresent(Double.self, forKey: .letterSpacing) ?? 2
+        sizeMultiplier = try c.decodeIfPresent(Double.self, forKey: .sizeMultiplier) ?? 1
+        inkColorIndex = try c.decodeIfPresent(Int.self, forKey: .inkColorIndex) ?? 0
+        leftMargin = try c.decodeIfPresent(Double.self, forKey: .leftMargin) ?? 48
+        firstBaseline = try c.decodeIfPresent(Double.self, forKey: .firstBaseline) ?? 90
+        variationSeed = try c.decodeIfPresent(Int.self, forKey: .variationSeed) ?? 0
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        updatedAt = try c.decode(Date.self, forKey: .updatedAt)
+    }
 }

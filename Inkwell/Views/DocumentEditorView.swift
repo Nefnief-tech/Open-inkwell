@@ -2,25 +2,34 @@ import SwiftUI
 import PhotosUI
 import PencilKit
 
-/// Type text, pick a hand + background, match the line spacing — the
-/// handwriting scales automatically. Export as PNG or PDF.
+/// Type text, pick a hand + background, calibrate the line grid by dragging
+/// guides right on the paper — the handwriting scales automatically.
+/// Large preview with the controls in a side panel on iPad.
 struct DocumentEditorView: View {
     let docID: UUID
 
     @Environment(DocumentStore.self) private var documents
     @Environment(HandStore.self) private var hands
     @Environment(\.displayScale) private var displayScale
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
-    @State private var glyphs: [String: PKDrawing] = [:]
+    @State private var glyphs: [String: [PKDrawing]] = [:]
     @State private var background: UIImage?
     @State private var preview: UIImage?
     @State private var photoItem: PhotosPickerItem?
     @State private var showShare = false
     @State private var shareURL: URL?
     @State private var showGuides = false
+    @State private var calibrating = false
     @State private var isExporting = false
     @State private var showRename = false
     @State private var renameText = ""
+
+    // Drag calibration state: which line, and its value when the drag began.
+    @State private var dragKind: CalibLineKind?
+    @State private var dragStartValue: Double = 0
+
+    private enum CalibLineKind { case firstBaseline, spacing, leftMargin }
 
     private var doc: HandDocument? { documents.document(id: docID) }
 
@@ -31,6 +40,8 @@ struct DocumentEditorView: View {
             doc.text, doc.handID.uuidString, doc.template.rawValue,
             String(doc.lineSpacing), String(doc.letterSpacing),
             String(doc.sizeMultiplier), String(doc.inkColorIndex),
+            String(doc.leftMargin), String(doc.firstBaseline),
+            String(doc.variationSeed),
             doc.usesBackgroundImage ? "bg" : "paper",
         ].joined(separator: "|")
     }
@@ -45,16 +56,31 @@ struct DocumentEditorView: View {
         }
     }
 
+    // MARK: - Layout
+
     private func editor(_ doc: HandDocument) -> some View {
-        VStack(spacing: 0) {
-            previewPane(doc)
-            controls(doc)
+        Group {
+            if sizeClass == .regular {
+                HStack(spacing: 0) {
+                    previewPane(doc)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    Divider()
+                    controls(doc)
+                        .frame(width: 370)
+                }
+            } else {
+                VStack(spacing: 0) {
+                    previewPane(doc)
+                        .frame(height: 320)
+                    controls(doc)
+                }
+            }
         }
         .navigationTitle(doc.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                exportMenu(doc)
+                editorMenu(doc)
             }
         }
         .task(id: doc.handID) {
@@ -84,15 +110,53 @@ struct DocumentEditorView: View {
         }
     }
 
+    private func editorMenu(_ doc: HandDocument) -> some View {
+        Menu {
+            Button {
+                renameText = doc.name
+                showRename = true
+            } label: {
+                Label("Rename", systemImage: "pencil")
+            }
+            Button {
+                documents.duplicateDocument(docID)
+            } label: {
+                Label("Duplicate", systemImage: "plus.square.on.square")
+            }
+            Divider()
+            Button {
+                export(doc, asPDF: false)
+            } label: {
+                Label("Export as PNG", systemImage: "photo")
+            }
+            Button {
+                export(doc, asPDF: true)
+            } label: {
+                Label("Export as PDF", systemImage: "doc.richtext")
+            }
+        } label: {
+            if isExporting {
+                ProgressView()
+            } else {
+                Label("More", systemImage: "ellipsis.circle")
+            }
+        }
+        .disabled(glyphs.isEmpty)
+    }
+
     // MARK: - Preview
 
     private func previewPane(_ doc: HandDocument) -> some View {
         VStack(spacing: 0) {
-            HStack {
+            HStack(spacing: 12) {
                 Text(glyphs.isEmpty ? "Capture characters in “\(handName(doc))” first" : "Preview")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
+                Toggle("Align", isOn: $calibrating.animation())
+                    .toggleStyle(.button)
+                    .font(.caption)
+                    .disabled(preview == nil)
                 Toggle("Guides", isOn: $showGuides)
                     .toggleStyle(.button)
                     .font(.caption)
@@ -100,30 +164,147 @@ struct DocumentEditorView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
 
-            ZStack {
-                if let preview {
-                    Image(uiImage: preview)
-                        .resizable()
-                        .scaledToFit()
-                        .shadow(color: .black.opacity(0.15), radius: 6, y: 3)
-                } else {
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(PaperTheme.uiPaper.color)
-                        .aspectRatio(GlyphRenderer.blankPageSize.width / GlyphRenderer.blankPageSize.height,
-                                     contentMode: .fit)
-                        .overlay(ProgressView())
+            GeometryReader { geo in
+                let page = pageSize(doc)
+                let rect = fittedRect(geo.size, page: page)
+                let scale = rect.height / max(1, page.height)
+                ZStack {
+                    if let preview {
+                        Image(uiImage: preview)
+                            .resizable()
+                            .scaledToFit()
+                            .shadow(color: .black.opacity(0.15), radius: 6, y: 3)
+                    }
+                    if showGuides {
+                        BaselineGuidesOverlay(lineSpacing: doc.lineSpacing,
+                                              firstBaseline: doc.firstBaseline)
+                            .allowsHitTesting(false)
+                    }
+                    if calibrating {
+                        calibrationLines(doc, rect: rect, scale: scale)
+                    }
                 }
-                if showGuides {
-                    BaselineGuidesOverlay(lineSpacing: doc.lineSpacing,
-                                          firstBaseline: doc.lineSpacing)
-                        .allowsHitTesting(false)
-                }
+                .frame(width: rect.width, height: rect.height)
+                .position(x: rect.midX, y: rect.midY)
+                .coordinateSpace(name: "calibSpace")
             }
             .padding(16)
         }
-        .frame(maxWidth: .infinity)
-        .frame(height: 340)
-        .background(.bar)
+    }
+
+    /// Two draggable horizontal lines (first line + second line → spacing)
+    /// and a draggable vertical line (line start / left margin). Drag
+    /// translations are converted to page points and written straight into
+    /// the document — the preview re-renders live.
+    @ViewBuilder
+    private func calibrationLines(_ doc: HandDocument, rect: CGRect, scale: CGFloat) -> some View {
+        calibHorizontalLine(
+            kind: .firstBaseline,
+            y: CGFloat(doc.firstBaseline) * scale,
+            label: "1st line", color: .red,
+            containerHeight: rect.height, scale: scale,
+            currentValue: doc.firstBaseline
+        ) { start, delta in
+            guard var d = documents.document(id: docID) else { return }
+            d.firstBaseline = (start + delta).clamped(20...(pageSize(d).height - 20))
+            documents.update(d)
+        }
+        calibHorizontalLine(
+            kind: .spacing,
+            y: CGFloat(doc.firstBaseline + doc.lineSpacing) * scale,
+            label: "spacing", color: .orange,
+            containerHeight: rect.height, scale: scale,
+            currentValue: doc.lineSpacing
+        ) { start, delta in
+            guard var d = documents.document(id: docID) else { return }
+            d.lineSpacing = (start + delta).clamped(20...300)
+            documents.update(d)
+        }
+        calibVerticalLine(
+            x: CGFloat(doc.leftMargin) * scale,
+            label: "start", color: .blue,
+            containerWidth: rect.width, scale: scale,
+            currentValue: doc.leftMargin
+        ) { start, delta in
+            guard var d = documents.document(id: docID) else { return }
+            d.leftMargin = (start + delta).clamped(0...240)
+            documents.update(d)
+        }
+    }
+
+    private func hCalibGesture(kind: CalibLineKind, currentValue: Double, scale: CGFloat,
+                               apply: @escaping (Double, Double) -> Void) -> some Gesture {
+        DragGesture(coordinateSpace: .named("calibSpace"))
+            .onChanged { g in
+                if dragKind != kind {
+                    dragKind = kind
+                    dragStartValue = currentValue
+                }
+                apply(dragStartValue, Double(g.translation.height / scale))
+            }
+            .onEnded { _ in dragKind = nil }
+    }
+
+    private func vCalibGesture(kind: CalibLineKind, currentValue: Double, scale: CGFloat,
+                               apply: @escaping (Double, Double) -> Void) -> some Gesture {
+        DragGesture(coordinateSpace: .named("calibSpace"))
+            .onChanged { g in
+                if dragKind != kind {
+                    dragKind = kind
+                    dragStartValue = currentValue
+                }
+                apply(dragStartValue, Double(g.translation.width / scale))
+            }
+            .onEnded { _ in dragKind = nil }
+    }
+
+    private func calibHorizontalLine(kind: CalibLineKind, y: CGFloat, label: String,
+                                     color: Color, containerHeight: CGFloat, scale: CGFloat,
+                                     currentValue: Double,
+                                     apply: @escaping (Double, Double) -> Void) -> some View {
+        ZStack(alignment: .leading) {
+            Rectangle()
+                .fill(color.opacity(0.8))
+                .frame(height: 1.5)
+            HStack(spacing: 4) {
+                Image(systemName: "line.3.horizontal")
+                Text(label).font(.caption2.weight(.semibold))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(color, in: Capsule())
+            .padding(.leading, 8)
+        }
+        .frame(maxWidth: .infinity, minHeight: 34)
+        .contentShape(Rectangle())
+        .offset(y: y - containerHeight / 2)
+        .gesture(hCalibGesture(kind: kind, currentValue: currentValue,
+                               scale: scale, apply: apply))
+    }
+
+    private func calibVerticalLine(x: CGFloat, label: String, color: Color,
+                                   containerWidth: CGFloat, scale: CGFloat,
+                                   currentValue: Double,
+                                   apply: @escaping (Double, Double) -> Void) -> some View {
+        ZStack {
+            Rectangle()
+                .fill(color.opacity(0.8))
+                .frame(width: 1.5)
+            VStack(spacing: 4) {
+                Image(systemName: "arrow.left.and.right")
+                Text(label).font(.caption2.weight(.semibold))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+            .background(color, in: Capsule())
+        }
+        .frame(minWidth: 34, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .offset(x: x - containerWidth / 2)
+        .gesture(vCalibGesture(kind: .leftMargin, currentValue: currentValue,
+                               scale: scale, apply: apply))
     }
 
     // MARK: - Controls
@@ -181,14 +362,22 @@ struct DocumentEditorView: View {
             } header: {
                 Text("Background")
             } footer: {
-                Text("Import a photo of your paper, then match the line spacing below — the handwriting scales to fit automatically.")
+                Text("Import a photo of your paper, then drag the guides in Align mode — spacing and line start are calculated for you. Fine-tune below; the handwriting scales to fit automatically.")
             }
 
-            Section("Fit & Style") {
+            Section {
                 sliderRow("Line spacing", value: Binding(
                     get: { doc.lineSpacing },
                     set: { var d = doc; d.lineSpacing = $0; documents.update(d) }
-                ), in: 30...200, format: "%.0f pt")
+                ), in: 20...300, format: "%.0f pt")
+                sliderRow("First line", value: Binding(
+                    get: { doc.firstBaseline },
+                    set: { var d = doc; d.firstBaseline = $0; documents.update(d) }
+                ), in: 20...400, format: "%.0f pt")
+                sliderRow("Line start", value: Binding(
+                    get: { doc.leftMargin },
+                    set: { var d = doc; d.leftMargin = $0; documents.update(d) }
+                ), in: 0...240, format: "%.0f pt")
                 sliderRow("Letter spacing", value: Binding(
                     get: { doc.letterSpacing },
                     set: { var d = doc; d.letterSpacing = $0; documents.update(d) }
@@ -196,28 +385,42 @@ struct DocumentEditorView: View {
                 sliderRow("Text size", value: Binding(
                     get: { doc.sizeMultiplier },
                     set: { var d = doc; d.sizeMultiplier = $0; documents.update(d) }
-                ), in: 0.6...1.8, format: "%.2f×")
+                ), in: 0.4...2.5, format: "%.2f×")
 
-                HStack {
-                    Text("Ink")
-                    Spacer()
-                    HStack(spacing: 8) {
-                        ForEach(InkPalette.colors.indices, id: \.self) { index in
-                            Button {
-                                var d = doc; d.inkColorIndex = index; documents.update(d)
-                            } label: {
-                                Circle()
-                                    .fill(InkPalette.colors[index])
-                                    .frame(width: 22, height: 22)
-                                    .overlay(
-                                        Circle().strokeBorder(
-                                            doc.inkColorIndex == index ? Color.primary : .clear,
-                                            lineWidth: 2
-                                        )
+                let xHeight = Int((GlyphRenderer.xHeightSpan * doc.lineSpacing
+                                   / GlyphRenderer.naturalLineAdvance * doc.sizeMultiplier).rounded())
+                LabeledContent("Resulting x-height", value: "≈ \(xHeight) pt")
+
+                Button {
+                    var d = doc
+                    d.variationSeed = Int.random(in: 0...Int(Int32.max))
+                    documents.update(d)
+                } label: {
+                    Label("Shuffle Letter Variations", systemImage: "shuffle")
+                }
+            } header: {
+                Text("Fit & Style")
+            } footer: {
+                Text("x-height is what your lowercase letters measure on the page. Each letter with multiple captured variations is picked randomly per occurrence.")
+            }
+
+            Section("Ink") {
+                HStack(spacing: 10) {
+                    ForEach(InkPalette.colors.indices, id: \.self) { index in
+                        Button {
+                            var d = doc; d.inkColorIndex = index; documents.update(d)
+                        } label: {
+                            Circle()
+                                .fill(InkPalette.colors[index])
+                                .frame(width: 24, height: 24)
+                                .overlay(
+                                    Circle().strokeBorder(
+                                        doc.inkColorIndex == index ? Color.primary : .clear,
+                                        lineWidth: 2
                                     )
-                            }
-                            .buttonStyle(.plain)
+                                )
                         }
+                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -238,28 +441,67 @@ struct DocumentEditorView: View {
         }
     }
 
-    // MARK: - Export
+    // MARK: - Helpers
 
-    private func exportMenu(_ doc: HandDocument) -> some View {
-        Menu {
-            Button {
-                export(doc, asPDF: false)
-            } label: {
-                Label("Export as PNG", systemImage: "photo")
-            }
-            Button {
-                export(doc, asPDF: true)
-            } label: {
-                Label("Export as PDF", systemImage: "doc.richtext")
-            }
-        } label: {
-            if isExporting {
-                ProgressView()
-            } else {
-                Label("Export", systemImage: "square.and.arrow.up")
-            }
+    private func handName(_ doc: HandDocument) -> String {
+        hands.hand(id: doc.handID)?.name ?? "hand"
+    }
+
+    private func pageSize(_ doc: HandDocument) -> CGSize {
+        if doc.usesBackgroundImage, let background {
+            return background.size
         }
-        .disabled(glyphs.isEmpty)
+        return GlyphRenderer.blankPageSize
+    }
+
+    private func fittedRect(_ container: CGSize, page: CGSize) -> CGRect {
+        guard page.width > 0, page.height > 0, container.width > 0, container.height > 0 else {
+            return .zero
+        }
+        let s = min(container.width / page.width, container.height / page.height)
+        let w = page.width * s
+        let h = page.height * s
+        return CGRect(x: (container.width - w) / 2, y: (container.height - h) / 2,
+                      width: w, height: h)
+    }
+
+    private func composeSettings(_ doc: HandDocument, ink: UIColor?) -> GlyphRenderer.ComposeSettings {
+        GlyphRenderer.ComposeSettings(
+            lineSpacing: CGFloat(doc.lineSpacing),
+            letterSpacing: CGFloat(doc.letterSpacing),
+            sizeMultiplier: CGFloat(doc.sizeMultiplier),
+            spaceWidthFraction: hands.hand(id: doc.handID)?.spaceWidth ?? 0.35,
+            pageWidth: pageSize(doc).width,
+            leftMargin: CGFloat(doc.leftMargin),
+            firstBaseline: CGFloat(doc.firstBaseline),
+            inkColor: ink,
+            variationSeed: UInt64(bitPattern: Int64(doc.variationSeed))
+        )
+    }
+
+    private func renderPreview(_ doc: HandDocument) {
+        let ink = InkPalette.uiColors[doc.inkColorIndex]
+        let composed = GlyphRenderer.compose(text: doc.text, glyphs: glyphs,
+                                             settings: composeSettings(doc, ink: ink))
+        let image = GlyphRenderer.renderPage(size: pageSize(doc), scale: 1,
+                                             background: doc.usesBackgroundImage ? background : nil,
+                                             template: doc.template, composed: composed)
+        preview = image
+        documents.saveThumbnail(docID: docID, image: image)
+    }
+
+    private func importPhoto(_ item: PhotosPickerItem?) {
+        guard let item else { return }
+        Task {
+            if let data = try? await item.loadTransferable(type: Data.self) {
+                await documents.saveBackground(docID: docID, imageData: data)
+                background = await documents.loadBackground(docID: docID)
+            }
+            if let doc = documents.document(id: docID) {
+                glyphs = await hands.allGlyphs(handID: doc.handID)
+            }
+            photoItem = nil
+        }
     }
 
     private func export(_ doc: HandDocument, asPDF: Bool) {
@@ -296,59 +538,9 @@ struct DocumentEditorView: View {
             }
         }
     }
-
-    // MARK: - Helpers
-
-    private func handName(_ doc: HandDocument) -> String {
-        hands.hand(id: doc.handID)?.name ?? "hand"
-    }
-
-    private func pageSize(_ doc: HandDocument) -> CGSize {
-        if doc.usesBackgroundImage, let background {
-            return background.size
-        }
-        return GlyphRenderer.blankPageSize
-    }
-
-    private func composeSettings(_ doc: HandDocument, ink: UIColor?) -> GlyphRenderer.ComposeSettings {
-        GlyphRenderer.ComposeSettings(
-            lineSpacing: CGFloat(doc.lineSpacing),
-            letterSpacing: CGFloat(doc.letterSpacing),
-            sizeMultiplier: CGFloat(doc.sizeMultiplier),
-            spaceWidthFraction: hands.hand(id: doc.handID)?.spaceWidth ?? 0.35,
-            pageWidth: pageSize(doc).width,
-            firstBaseline: CGFloat(doc.lineSpacing),
-            inkColor: ink
-        )
-    }
-
-    private func renderPreview(_ doc: HandDocument) {
-        let ink = InkPalette.uiColors[doc.inkColorIndex]
-        let composed = GlyphRenderer.compose(text: doc.text, glyphs: glyphs,
-                                             settings: composeSettings(doc, ink: ink))
-        let image = GlyphRenderer.renderPage(size: pageSize(doc), scale: 1,
-                                             background: doc.usesBackgroundImage ? background : nil,
-                                             template: doc.template, composed: composed)
-        preview = image
-        documents.saveThumbnail(docID: docID, image: image)
-    }
-
-    private func importPhoto(_ item: PhotosPickerItem?) {
-        guard let item else { return }
-        Task {
-            if let data = try? await item.loadTransferable(type: Data.self) {
-                await documents.saveBackground(docID: docID, imageData: data)
-                background = await documents.loadBackground(docID: docID)
-            }
-            if let doc = documents.document(id: docID) {
-                glyphs = await hands.allGlyphs(handID: doc.handID)
-            }
-            photoItem = nil
-        }
-    }
 }
 
-/// Horizontal guide lines matching the composed baselines.
+/// Horizontal baseline guide lines matching the composed text layout.
 struct BaselineGuidesOverlay: View {
     var lineSpacing: CGFloat
     var firstBaseline: CGFloat
@@ -378,4 +570,10 @@ struct ShareSheet: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+
+extension Double {
+    func clamped(_ range: ClosedRange<Double>) -> Double {
+        min(max(self, range.lowerBound), range.upperBound)
+    }
 }

@@ -91,6 +91,39 @@ final class DocumentStore {
         thumbCache.removeObject(forKey: id as NSUUID)
     }
 
+    /// Copies the manifest plus background/thumbnail files under a new id.
+    @discardableResult
+    func duplicateDocument(_ id: UUID) -> HandDocument? {
+        guard let doc = document(id: id) else { return nil }
+        let copy = HandDocument(
+            id: UUID(),
+            name: "\(doc.name) Copy",
+            handID: doc.handID,
+            text: doc.text,
+            usesBackgroundImage: doc.usesBackgroundImage,
+            template: doc.template,
+            lineSpacing: doc.lineSpacing,
+            letterSpacing: doc.letterSpacing,
+            sizeMultiplier: doc.sizeMultiplier,
+            inkColorIndex: doc.inkColorIndex,
+            leftMargin: doc.leftMargin,
+            firstBaseline: doc.firstBaseline,
+            variationSeed: Int.random(in: 0...Int(Int32.max)),
+            createdAt: .now,
+            updatedAt: .now
+        )
+        try? fileManager.createDirectory(at: docURL(copy.id), withIntermediateDirectories: true)
+        for file in ["bg.jpg", "thumb.png"] {
+            let source = docURL(id).appending(path: file)
+            if fileManager.fileExists(atPath: source.path) {
+                try? fileManager.copyItem(at: source, to: docURL(copy.id).appending(path: file))
+            }
+        }
+        documents.insert(copy, at: 0)
+        persist(copy)
+        return copy
+    }
+
     // MARK: - Background image
 
     /// Downscales to a max edge of 2400 px and stores as JPEG.

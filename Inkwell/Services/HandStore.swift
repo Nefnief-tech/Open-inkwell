@@ -2,11 +2,12 @@ import Foundation
 import Observation
 import PencilKit
 
-/// Persistence + CRUD for handwriting sets.
+/// Persistence + CRUD for handwriting sets and their glyph variants.
 ///
 /// Layout under Documents/Hands/<hand-uuid>/:
-///   hand.json                    — HandwritingSet manifest
-///   glyphs/<unicode-hex>.drawing — PKDrawing per drawn character
+///   hand.json                       — HandwritingSet manifest
+///   glyphs/<hex>.drawing            — variant 0 of a character
+///   glyphs/<hex>-v<n>.drawing       — variant n ≥ 1
 @MainActor
 @Observable
 final class HandStore {
@@ -31,9 +32,10 @@ final class HandStore {
         handURL(id).appending(path: "hand.json")
     }
 
-    private func glyphURL(_ handID: UUID, _ character: String) -> URL {
+    private func glyphURL(_ handID: UUID, _ character: String, variant: Int) -> URL {
         let hex = character.unicodeScalars.map { String(format: "%04X", $0.value) }.joined()
-        return handURL(handID).appending(path: "glyphs/\(hex).drawing")
+        let name = variant <= 0 ? hex : "\(hex)-v\(variant)"
+        return handURL(handID).appending(path: "glyphs/\(name).drawing")
     }
 
     // MARK: - Loading
@@ -54,6 +56,10 @@ final class HandStore {
     func hand(id: UUID?) -> HandwritingSet? {
         guard let id else { return nil }
         return hands.first { $0.id == id }
+    }
+
+    func variantCount(handID: UUID, character: String) -> Int {
+        hand(id: handID)?.variantCount(character) ?? 0
     }
 
     // MARK: - CRUD
@@ -93,10 +99,10 @@ final class HandStore {
 
     // MARK: - Glyphs
 
-    func glyphDrawing(handID: UUID, character: String) async -> PKDrawing? {
-        let key = "\(handID.uuidString)-\(character)"
+    func glyphDrawing(handID: UUID, character: String, variant: Int = 0) async -> PKDrawing? {
+        let key = "\(handID.uuidString)-\(character)-\(variant)"
         if let cached = glyphCache[key] { return cached }
-        let url = glyphURL(handID, character)
+        let url = glyphURL(handID, character, variant: variant)
         let drawing = await Task.detached(priority: .userInitiated) { () -> PKDrawing? in
             guard let data = try? Data(contentsOf: url) else { return nil }
             return try? PKDrawing(data: data)
@@ -107,13 +113,19 @@ final class HandStore {
         return drawing
     }
 
-    /// Loads every drawn glyph of a hand at once (for composing documents).
-    func allGlyphs(handID: UUID) async -> [String: PKDrawing] {
+    /// Loads every drawn glyph variant of a hand at once (for composing documents).
+    func allGlyphs(handID: UUID) async -> [String: [PKDrawing]] {
         guard let hand = hand(id: handID) else { return [:] }
-        var result: [String: PKDrawing] = [:]
+        var result: [String: [PKDrawing]] = [:]
         for character in hand.doneCharacters {
-            if let drawing = await glyphDrawing(handID: handID, character: character) {
-                result[character] = drawing
+            var variants: [PKDrawing] = []
+            for v in 0..<max(1, hand.variantCount(character)) {
+                if let drawing = await glyphDrawing(handID: handID, character: character, variant: v) {
+                    variants.append(drawing)
+                }
+            }
+            if !variants.isEmpty {
+                result[character] = variants
             }
         }
         return result
@@ -128,13 +140,15 @@ final class HandStore {
         return image
     }
 
-    /// Saves a captured glyph (already normalized to cell coordinates).
-    func saveGlyph(handID: UUID, character: String, drawing: PKDrawing) async {
-        let url = glyphURL(handID, character)
+    /// Saves one variant of a captured glyph (already normalized to cell
+    /// coordinates). Variant 0 marks the character done; higher variants are
+    /// additions.
+    func saveGlyph(handID: UUID, character: String, variant: Int, drawing: PKDrawing) async {
+        let url = glyphURL(handID, character, variant: variant)
         try? fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let data = await Task.detached(priority: .utility) { drawing.dataRepresentation() }.value
         try? data.write(to: url, options: .atomic)
-        glyphCache["\(handID.uuidString)-\(character)"] = drawing
+        glyphCache["\(handID.uuidString)-\(character)-\(variant)"] = drawing
         thumbCache.removeObject(forKey: "\(handID.uuidString)-\(character)" as NSString)
 
         if let idx = hands.firstIndex(where: { $0.id == handID }) {
@@ -142,9 +156,29 @@ final class HandStore {
                 hands[idx].doneCharacters.append(character)
             }
             hands[idx].skippedCharacters.removeAll { $0 == character }
+            hands[idx].variantCounts[character] = max(variant + 1,
+                                                      hands[idx].variantCounts[character] ?? 1)
             hands[idx].updatedAt = .now
             persist(hands[idx])
         }
+    }
+
+    /// Removes a single variant (falls back to skipping the character when
+    /// the last variant is removed).
+    func removeGlyphVariant(handID: UUID, character: String, variant: Int) {
+        guard let idx = hands.firstIndex(where: { $0.id == handID }) else { return }
+        try? fileManager.removeItem(at: glyphURL(handID, character, variant: variant))
+        glyphCache["\(handID.uuidString)-\(character)-\(variant)"] = nil
+
+        let remaining = max(0, (hands[idx].variantCounts[character] ?? 1) - (variant >= 0 ? 1 : 0))
+        if remaining == 0 {
+            hands[idx].doneCharacters.removeAll { $0 == character }
+            hands[idx].variantCounts[character] = nil
+        } else {
+            hands[idx].variantCounts[character] = remaining
+        }
+        hands[idx].updatedAt = .now
+        persist(hands[idx])
     }
 
     func skipGlyph(handID: UUID, character: String) {
@@ -153,8 +187,11 @@ final class HandStore {
             hands[idx].skippedCharacters.append(character)
         }
         hands[idx].doneCharacters.removeAll { $0 == character }
-        try? fileManager.removeItem(at: glyphURL(handID, character))
-        glyphCache["\(handID.uuidString)-\(character)"] = nil
+        hands[idx].variantCounts[character] = nil
+        for v in 0...8 {
+            try? fileManager.removeItem(at: glyphURL(handID, character, variant: v))
+        }
+        glyphCache = glyphCache.filter { !$0.key.hasPrefix("\(handID.uuidString)-\(character)-") }
         hands[idx].updatedAt = .now
         persist(hands[idx])
     }

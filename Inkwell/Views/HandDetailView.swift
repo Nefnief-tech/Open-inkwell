@@ -123,7 +123,8 @@ struct HandDetailView: View {
                         character: character,
                         handID: handID,
                         isDone: hand.isDone(character),
-                        isSkipped: hand.isSkipped(character)
+                        isSkipped: hand.isSkipped(character),
+                        variantCount: hand.variantCount(character)
                     ) {
                         captureIndex = CharsetGroup.allCharacters.firstIndex(of: character)
                     }
@@ -172,6 +173,7 @@ private struct GlyphCell: View {
     let handID: UUID
     let isDone: Bool
     let isSkipped: Bool
+    let variantCount: Int
     let onTap: () -> Void
 
     @Environment(HandStore.self) private var hands
@@ -211,6 +213,17 @@ private struct GlyphCell: View {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.caption2)
                         .foregroundStyle(.green)
+                        .padding(4)
+                }
+            }
+            .overlay(alignment: .bottomLeading) {
+                if isDone && variantCount > 1 {
+                    Text("×\(variantCount)")
+                        .font(.caption2.weight(.bold).monospacedDigit())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(Color.accentColor, in: Capsule())
                         .padding(4)
                 }
             }

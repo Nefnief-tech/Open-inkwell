@@ -129,6 +129,11 @@ struct DocumentsListView: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
+            Button {
+                documents.duplicateDocument(doc.id)
+            } label: {
+                Label("Duplicate", systemImage: "plus.square.on.square")
+            }
             Button(role: .destructive) {
                 deleting = doc
             } label: {

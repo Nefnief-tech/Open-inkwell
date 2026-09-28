@@ -16,6 +16,7 @@ enum GlyphRenderer {
     static let xHeightY: CGFloat = 230
     static let ascenderY: CGFloat = 134
     static let descenderY: CGFloat = 476
+    static let xHeightSpan: CGFloat = baselineY - xHeightY
     static let cellWidth: CGFloat = 400        // reference width for space width
 
     /// Baseline-to-baseline distance at scale 1. Tuned so handwriting
@@ -44,18 +45,21 @@ enum GlyphRenderer {
         var leftMargin: CGFloat = 48
         var firstBaseline: CGFloat        // baseline of the first line
         var inkColor: UIColor?            // nil = keep captured colors
+        var variationSeed: UInt64 = 0     // + shuffle → re-picks glyph variants
     }
 
     /// Builds one PKDrawing containing the whole text laid out on the line
-    /// grid. Undrawn characters are omitted.
+    /// grid. Undrawn characters are omitted; each occurrence draws a randomly
+    /// (but deterministically) picked variation of its glyph.
     static func compose(
         text: String,
-        glyphs: [String: PKDrawing],
+        glyphs: [String: [PKDrawing]],
         settings: ComposeSettings
     ) -> PKDrawing {
         let k = (settings.lineSpacing / naturalLineAdvance) * settings.sizeMultiplier
         let spaceAdvance = CGFloat(settings.spaceWidthFraction) * cellWidth * k
-        let maxWidth = settings.pageWidth - settings.leftMargin * 2
+        let rightMargin: CGFloat = 48
+        let maxWidth = settings.pageWidth - settings.leftMargin - rightMargin
 
         var strokes: [PKStroke] = []
         var baseline = settings.firstBaseline
@@ -81,11 +85,13 @@ enum GlyphRenderer {
                     append(String(ch), glyphs: glyphs, k: k,
                            letterSpacing: settings.letterSpacing,
                            penX: &penX, baseline: baseline,
-                           inkColor: settings.inkColor, strokes: &strokes)
+                           inkColor: settings.inkColor,
+                           variationSeed: settings.variationSeed,
+                           strokes: &strokes)
                 }
                 lineIsEmpty = false
                 // hard-break a single word that can't fit on a line at all
-                if penX > maxWidth + settings.leftMargin {
+                if penX > settings.pageWidth - rightMargin {
                     baseline += settings.lineSpacing
                     penX = settings.leftMargin
                 }
@@ -96,21 +102,40 @@ enum GlyphRenderer {
         return PKDrawing(strokes: strokes)
     }
 
-    private static func width(of word: String, glyphs: [String: PKDrawing], k: CGFloat,
+    /// Deterministic per-occurrence variant pick: stable across preview
+    /// re-renders, reshuffled by the document's variation seed.
+    private static func pickVariant(character: String, occurrence: Int,
+                                    count: Int, seed: UInt64) -> Int {
+        guard count > 1 else { return 0 }
+        var h = UInt64(character.unicodeScalars.first?.value ?? 0) &* 0x9E3779B97F4A7C15
+        h ^= UInt64(truncatingIfNeeded: occurrence) &* 0xC2B2AE3D27D4EB4F
+        h ^= seed &* 0x165667B19E3779F9
+        h ^= h >> 27
+        h = h &* 0x94D049BB133111EB
+        h ^= h >> 31
+        return Int(h % UInt64(count))
+    }
+
+    private static func width(of word: String, glyphs: [String: [PKDrawing]], k: CGFloat,
                               letterSpacing: CGFloat) -> CGFloat {
         var w: CGFloat = 0
         for ch in word {
-            if let g = glyphs[String(ch)], !g.strokes.isEmpty {
-                w += g.bounds.width * k + letterSpacing
+            if let variants = glyphs[String(ch)], let first = variants.first {
+                w += first.bounds.width * k + letterSpacing
             }
         }
         return w
     }
 
-    private static func append(_ character: String, glyphs: [String: PKDrawing], k: CGFloat,
+    private static func append(_ character: String, glyphs: [String: [PKDrawing]], k: CGFloat,
                                letterSpacing: CGFloat, penX: inout CGFloat, baseline: CGFloat,
-                               inkColor: UIColor?, strokes: inout [PKStroke]) {
-        guard let glyph = glyphs[character], !glyph.strokes.isEmpty else { return }
+                               inkColor: UIColor?, variationSeed: UInt64,
+                               strokes: inout [PKStroke]) {
+        guard let variants = glyphs[character], !variants.isEmpty else { return }
+        let glyph = variants[pickVariant(character: character,
+                                         occurrence: strokes.count,
+                                         count: variants.count,
+                                         seed: variationSeed)]
         let b = glyph.bounds
         let t = CGAffineTransform(
             translationX: penX - b.minX * k,

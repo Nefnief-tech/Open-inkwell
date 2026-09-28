@@ -22,10 +22,17 @@ struct GlyphCaptureView: View {
     @State private var editVersion = 0
     @State private var controller = CanvasController()
     @State private var isSaving = false
+    @State private var editingVariant = 0
+    @State private var pendingNewVariant = false
 
     private var character: String? {
         guard let index, characters.indices.contains(index) else { return nil }
         return characters[index]
+    }
+
+    private var variantCount: Int {
+        guard let character else { return 0 }
+        return hands.variantCount(handID: handID, character: character)
     }
 
     private var toolBinding: Binding<ToolConfig> {
@@ -97,9 +104,12 @@ struct GlyphCaptureView: View {
                 }
             }
             .safeAreaInset(edge: .bottom) {
-                umlautShortcut
+                VStack(spacing: 8) {
+                    variationBar
+                    umlautShortcut
+                }
             }
-            .task(id: character) {
+            .task(id: "\(character ?? "")-\(editingVariant)-\(pendingNewVariant)") {
                 await loadCurrent()
             }
         }
@@ -107,7 +117,51 @@ struct GlyphCaptureView: View {
 
     private var titleText: String {
         guard let index, let character else { return "" }
-        return "“\(character)” · \(index + 1)/\(characters.count)"
+        var title = "“\(character)” · \(index + 1)/\(characters.count)"
+        if variantCount > 1 || pendingNewVariant {
+            title += " · Variation \(editingVariant + 1)"
+        }
+        return title
+    }
+
+    /// Variation switcher / add-variation controls for drawn characters.
+    @ViewBuilder
+    private var variationBar: some View {
+        if let character, hands.hand(id: handID)?.isDone(character) == true, !pendingNewVariant {
+            HStack(spacing: 14) {
+                if variantCount > 1 {
+                    Button {
+                        editingVariant = max(0, editingVariant - 1)
+                    } label: {
+                        Image(systemName: "chevron.left")
+                    }
+                    .disabled(editingVariant == 0)
+                    Text("Variation \(editingVariant + 1)/\(variantCount)")
+                        .font(.callout.monospacedDigit())
+                    Button {
+                        editingVariant = min(variantCount - 1, editingVariant + 1)
+                    } label: {
+                        Image(systemName: "chevron.right")
+                    }
+                    .disabled(editingVariant >= variantCount - 1)
+                } else {
+                    Text("1 Variation")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Button {
+                    pendingNewVariant = true
+                    editingVariant = variantCount
+                    drawing = PKDrawing()
+                    editVersion += 1
+                } label: {
+                    Label("Add Variation", systemImage: "plus.square.dashed")
+                        .font(.callout.weight(.semibold))
+                }
+                .buttonStyle(.bordered)
+            }
+            .buttonStyle(.bordered)
+        }
     }
 
     /// One-tap umlauts: copy the base letter's glyph and stamp two dots.
@@ -144,11 +198,23 @@ struct GlyphCaptureView: View {
     }
 
     private func loadCurrent() async {
-        guard let character, let hand = hands.hand(id: handID) else { return }
-        if hand.isDone(character) {
-            drawing = await hands.glyphDrawing(handID: handID, character: character) ?? PKDrawing()
-        } else {
+        guard let character else { return }
+        if pendingNewVariant {
+            // Fresh blank canvas for a new variation slot.
             drawing = PKDrawing()
+            editVersion += 1
+            return
+        }
+        let isDone = hands.hand(id: handID)?.isDone(character) ?? false
+        let count = variantCount
+        if !isDone {
+            editingVariant = 0
+            drawing = PKDrawing()
+        } else {
+            if editingVariant >= count { editingVariant = 0 }
+            drawing = await hands.glyphDrawing(
+                handID: handID, character: character, variant: editingVariant
+            ) ?? PKDrawing()
         }
         editVersion += 1
     }
@@ -159,9 +225,12 @@ struct GlyphCaptureView: View {
         Task {
             if let baseDrawing = await hands.glyphDrawing(handID: handID, character: base) {
                 let combined = GlyphRenderer.addUmlautDots(to: baseDrawing)
+                let variant = pendingNewVariant ? variantCount : editingVariant
                 drawing = combined
                 editVersion += 1
-                await hands.saveGlyph(handID: handID, character: character, drawing: combined)
+                await hands.saveGlyph(handID: handID, character: character,
+                                      variant: variant, drawing: combined)
+                pendingNewVariant = false
                 advance()
             }
             isSaving = false
@@ -172,11 +241,14 @@ struct GlyphCaptureView: View {
         guard let character else { return }
         isSaving = true
         let normalized = GlyphRenderer.normalize(drawing)
+        let variant = pendingNewVariant ? variantCount : editingVariant
         let handID = self.handID
         let store = hands
         Task {
-            await store.saveGlyph(handID: handID, character: character, drawing: normalized)
+            await store.saveGlyph(handID: handID, character: character,
+                                  variant: variant, drawing: normalized)
             isSaving = false
+            pendingNewVariant = false
             advance()
         }
     }
@@ -188,6 +260,8 @@ struct GlyphCaptureView: View {
     }
 
     private func advance() {
+        pendingNewVariant = false
+        editingVariant = 0
         guard let index else { return }
         if index + 1 < characters.count {
             self.index = index + 1
