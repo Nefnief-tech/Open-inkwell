@@ -9,17 +9,29 @@ import UIKit
 /// fraction of the capture canvas, so after scaling to the cell the baseline
 /// sits exactly at `baselineY` — that's what makes vertical placement exact.
 enum GlyphRenderer {
-    // MARK: - Capture geometry (must match GlyphCaptureView's guides)
+    // MARK: - Geometry
 
-    static let captureCellHeight: CGFloat = 560
-    static let baselineY: CGFloat = 380        // in cell units
-    static let ascenderY: CGFloat = 110
+    // Cell space (normalized glyph coordinates)
+    static let baselineY: CGFloat = 380
     static let xHeightY: CGFloat = 230
-    static let descenderY: CGFloat = 500
+    static let ascenderY: CGFloat = 134
+    static let descenderY: CGFloat = 476
     static let cellWidth: CGFloat = 400        // reference width for space width
 
-    /// Baseline-to-baseline distance at scale 1.
-    static let naturalLineAdvance: CGFloat = 120
+    /// Baseline-to-baseline distance at scale 1. Tuned so handwriting
+    /// captured at comfortable size renders at realistic print size
+    /// (x-height ≈ 1/3 of the line spacing) instead of nearly full-size.
+    static let naturalLineAdvance: CGFloat = 480
+
+    // Capture-screen metrics in absolute points, anchored to the baseline
+    // guide — "write like you normally write" size.
+    static let captureXHeight: CGFloat = 70
+    static let captureAscender: CGFloat = 115
+    static let captureDescender: CGFloat = 45
+    static let captureBaselineFraction: CGFloat = 0.58
+
+    /// Maps capture-screen points into cell units (x-height span = 150 units).
+    static let captureScale: CGFloat = (baselineY - xHeightY) / captureXHeight
 
     // MARK: - Composition
 
@@ -171,12 +183,14 @@ enum GlyphRenderer {
 
     // MARK: - Glyph helpers
 
-    /// Normalizes a capture-canvas drawing into cell coordinates so the
-    /// baseline always lands on `baselineY`.
-    static func normalize(_ drawing: PKDrawing, captureHeight: CGFloat) -> PKDrawing {
-        guard captureHeight > 0, !drawing.strokes.isEmpty else { return drawing }
-        let s = captureCellHeight / captureHeight
-        return drawing.transformed(using: CGAffineTransform(scaleX: s, y: s))
+    /// Normalizes a capture-canvas drawing into cell coordinates. Guides are
+    /// at absolute point offsets from the baseline, so the scale factor is
+    /// constant — the baseline always lands exactly on `baselineY`.
+    static func normalize(_ drawing: PKDrawing) -> PKDrawing {
+        guard !drawing.strokes.isEmpty else { return drawing }
+        return drawing.transformed(
+            using: CGAffineTransform(scaleX: captureScale, y: captureScale)
+        )
     }
 
     /// Small preview image of a single glyph (for the progress grid).

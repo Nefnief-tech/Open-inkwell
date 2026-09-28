@@ -1,9 +1,10 @@
 import SwiftUI
 import PencilKit
+import UIKit
 
-/// Guided character capture: full-screen canvas with handwriting guides, a
-/// faint reference letter, and auto-advance. Reachable as a sheet from the
-/// hand detail grid.
+/// Guided character capture: full-screen canvas with handwriting guides at
+/// natural writing size, plus a font-metric-anchored reference glyph in the
+/// background that doubles as a size reference. Auto-advances on save.
 struct GlyphCaptureView: View {
     let handID: UUID
     let characters: [String]          // ordered capture list
@@ -19,7 +20,6 @@ struct GlyphCaptureView: View {
 
     @State private var drawing = PKDrawing()
     @State private var editVersion = 0
-    @State private var canvasSize: CGSize = .zero
     @State private var controller = CanvasController()
     @State private var isSaving = false
 
@@ -45,23 +45,17 @@ struct GlyphCaptureView: View {
     var body: some View {
         NavigationStack {
             ZStack(alignment: .bottom) {
-                GeometryReader { geo in
-                    ZStack {
-                        GuideOverlay()
-                        Text(character ?? " ")
-                            .font(.system(size: geo.size.height * 0.55, weight: .light))
-                            .foregroundStyle(Color.primary.opacity(0.07))
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        PencilCanvasView(
-                            drawing: drawing,
-                            editVersion: editVersion,
-                            toolConfig: toolBinding.wrappedValue,
-                            fingerDrawing: fingerDrawing,
-                            controller: controller,
-                            onDrawingChanged: { drawing = $0 }
-                        )
-                    }
-                    .onAppear { canvasSize = geo.size }
+                ZStack {
+                    GuideOverlay()
+                    ReferenceGlyphView(character: character ?? " ")
+                    PencilCanvasView(
+                        drawing: drawing,
+                        editVersion: editVersion,
+                        toolConfig: toolBinding.wrappedValue,
+                        fingerDrawing: fingerDrawing,
+                        controller: controller,
+                        onDrawingChanged: { drawing = $0 }
+                    )
                 }
                 .ignoresSafeArea(edges: .bottom)
 
@@ -177,7 +171,7 @@ struct GlyphCaptureView: View {
     private func saveAndAdvance() {
         guard let character else { return }
         isSaving = true
-        let normalized = GlyphRenderer.normalize(drawing, captureHeight: canvasSize.height)
+        let normalized = GlyphRenderer.normalize(drawing)
         let handID = self.handID
         let store = hands
         Task {
@@ -204,29 +198,21 @@ struct GlyphCaptureView: View {
     }
 }
 
-/// Dashed guides matching GlyphRenderer's capture geometry (fractions of the
-/// capture canvas height). Baseline is the anchor for all rendering.
+/// Dashed guides at absolute point offsets from the baseline (natural
+/// writing size). The baseline sits at `captureBaselineFraction` of height.
 struct GuideOverlay: View {
-    private struct Guide: Identifiable {
-        let name: String
-        let fraction: CGFloat
-        var id: String { name }
-    }
-
-    private var guides: [Guide] {
-        [
-            Guide(name: "Ascender", fraction: GlyphRenderer.ascenderY / GlyphRenderer.captureCellHeight),
-            Guide(name: "x-height", fraction: GlyphRenderer.xHeightY / GlyphRenderer.captureCellHeight),
-            Guide(name: "Baseline", fraction: GlyphRenderer.baselineY / GlyphRenderer.captureCellHeight),
-            Guide(name: "Descender", fraction: GlyphRenderer.descenderY / GlyphRenderer.captureCellHeight),
-        ]
-    }
-
     var body: some View {
         GeometryReader { geo in
             Canvas { context, size in
-                for guide in guides {
-                    let y = guide.fraction * size.height
+                let baseline = size.height * GlyphRenderer.captureBaselineFraction
+                let lines: [(name: String, offset: CGFloat)] = [
+                    ("Ascender", GlyphRenderer.captureAscender),
+                    ("x-height", GlyphRenderer.captureXHeight),
+                    ("Baseline", 0),
+                    ("Descender", -GlyphRenderer.captureDescender),
+                ]
+                for line in lines {
+                    let y = baseline - line.offset
                     var path = Path()
                     path.move(to: CGPoint(x: 0, y: y))
                     path.addLine(to: CGPoint(x: size.width, y: y))
@@ -236,12 +222,84 @@ struct GuideOverlay: View {
                         style: StrokeStyle(lineWidth: 1, dash: [6, 5])
                     )
                     context.draw(
-                        Text(guide.name).font(.caption2).foregroundStyle(.secondary),
+                        Text(line.name).font(.caption2).foregroundStyle(.secondary),
                         at: CGPoint(x: size.width - 52, y: y - 9)
                     )
                 }
             }
         }
         .allowsHitTesting(false)
+    }
+}
+
+// MARK: - Reference glyph (size reference)
+
+/// Shows the character in the background at natural writing size, with its
+/// font baseline exactly on the baseline guide — a real size reference.
+struct ReferenceGlyphView: UIViewRepresentable {
+    let character: String
+
+    func makeUIView(context: Context) -> ReferenceGlyphLabel {
+        ReferenceGlyphLabel()
+    }
+
+    func updateUIView(_ view: ReferenceGlyphLabel, context: Context) {
+        view.character = character
+    }
+}
+
+final class ReferenceGlyphLabel: UIView {
+    private let label = UILabel()
+
+    var character: String = "" {
+        didSet {
+            if character != oldValue { setNeedsLayout() }
+        }
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        label.textAlignment = .center
+        label.textColor = UIColor.black.withAlphaComponent(0.09)
+        label.numberOfLines = 1
+        addSubview(label)
+        isUserInteractionEnabled = false
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is not supported")
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard !character.isEmpty else {
+            label.text = nil
+            return
+        }
+        let baselineY = bounds.height * GlyphRenderer.captureBaselineFraction
+        let font = UIFont.systemFont(ofSize: Self.fontSize(for: character), weight: .light)
+        label.font = font
+        label.text = character
+        // Anchor: the font's baseline sits exactly on the guide baseline.
+        let lineHeight = font.ascender - font.descender
+        label.frame = CGRect(x: 0, y: baselineY - font.ascender,
+                             width: bounds.width, height: lineHeight)
+    }
+
+    /// Picks a font size whose cap height (uppercase, digits) or x-height
+    /// (lowercase, everything else) matches the guide lines.
+    static func fontSize(for character: String) -> CGFloat {
+        let probe = UIFont.systemFont(ofSize: 100)
+        let usesCapHeight: Bool
+        if character.count == 1, let value = character.unicodeScalars.first?.value {
+            usesCapHeight = (65...90).contains(value)      // A–Z
+                || (192...221).contains(value)             // Ä Ö Ü etc.
+                || (48...57).contains(value)               // 0–9
+        } else {
+            usesCapHeight = false
+        }
+        let target: CGFloat = usesCapHeight ? 100 : GlyphRenderer.captureXHeight
+        let ratio = usesCapHeight ? probe.capHeight : probe.xHeight
+        return target * (probe.pointSize / max(1, ratio))
     }
 }

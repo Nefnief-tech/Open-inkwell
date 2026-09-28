@@ -73,8 +73,7 @@ struct ToolBlock: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(.quaternary))
+        .glassCapsuleBackground()
         .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
     }
 
@@ -173,5 +172,24 @@ struct ToolBlock: View {
     private var blockDivider: some View {
         Divider()
             .frame(height: 26)
+    }
+}
+
+/// Liquid Glass on iPadOS 26+, regular material below.
+struct GlassCapsuleBackground: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(in: Capsule())
+        } else {
+            content
+                .background(.regularMaterial, in: Capsule())
+                .overlay(Capsule().strokeBorder(.quaternary))
+        }
+    }
+}
+
+extension View {
+    func glassCapsuleBackground() -> some View {
+        modifier(GlassCapsuleBackground())
     }
 }
