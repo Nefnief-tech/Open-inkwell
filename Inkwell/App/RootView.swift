@@ -1,21 +1,24 @@
 import SwiftUI
 
+/// Sidebar selection: the library grid, or a specific notebook.
+enum SidebarItem: Hashable {
+    case library
+    case notebook(UUID)
+}
+
 struct RootView: View {
     @Environment(LibraryStore.self) private var library
-    @State private var selection: Notebook.ID?
+    @State private var selection: SidebarItem? = .library
 
     var body: some View {
         NavigationSplitView {
             NotebooksSidebar(selection: $selection)
         } detail: {
-            if let selection, library.notebook(id: selection) != nil {
-                PagesGrid(notebookID: selection)
-            } else {
-                ContentUnavailableView(
-                    "No Notebook Selected",
-                    systemImage: "book.closed",
-                    description: Text("Create a notebook in the sidebar to start writing.")
-                )
+            switch selection {
+            case .notebook(let id) where library.notebook(id: id) != nil:
+                PagesGrid(notebookID: id)
+            default:
+                LibraryGridView(onOpen: { selection = .notebook($0) })
             }
         }
     }

@@ -6,14 +6,19 @@ GitHub Actions — no Mac, no paid developer account required.
 **Target device:** iPad (10th generation, 10.9-inch) + Apple Pencil (USB-C).
 **Minimum OS:** iPadOS 17.
 
-## Features (v1)
+## Features (v2)
 
-- Notebooks in a sidebar, page-thumbnail gallery per notebook
-- Full-bleed drawing canvas with `PKCanvasView` + floating `PKToolPicker`
-  (pen, marker, eraser, ruler, undo/redo, colors — all built in)
-- Palm rejection while the Pencil is in use; optional finger drawing toggle
+- **Library** — GoodNotes-style grid of notebook covers (8 color themes,
+  spine + title), notebook rename / duplicate / delete via context menus
+- **Sidebar** — custom list with mini covers, page counts, relative dates
+- **Pages** — thumbnail gallery with page numbers and template badges
+- **Custom tool block** — floating pencil toolbar (pen / pencil / marker /
+  vector eraser, 8 ink colors, 3 widths, undo/redo, hideable); replaces the
+  system `PKToolPicker`; tool choices persist between sessions
+- **Paper templates** — plain, lined, grid, dotted; per page (chosen when
+  creating) plus a notebook default; baked into saved thumbnails
+- Cream paper, palm rejection while the Pencil is in use, finger drawing toggle
 - Autosave (debounced) + save on app backgrounding
-- Page thumbnails regenerated on every save; delete/rename via context menus
 - On-device storage: `Documents/Notebooks/<uuid>/` (JSON manifest +
   PencilKit `.drawing` files + PNG thumbnails)
 
@@ -75,8 +80,8 @@ open Inkwell.xcodeproj
 ## Roadmap
 
 - [ ] PDF import (render pages as paper, annotate on top) & PDF export
-- [ ] Pinch zoom + pan with two fingers while writing
-- [ ] Paper templates (grid, lines, dots), page sizes (A4, screen-fit)
+- [ ] Pinch zoom + pan with two fingers while writing (fixed page sizes)
+- [ ] Ruler, lasso select / move strokes
 - [ ] Multi-page continuous scroll
 - [ ] Spotlight/Files integration, iCloud sync
 - [ ] Scribble-aware text boxes

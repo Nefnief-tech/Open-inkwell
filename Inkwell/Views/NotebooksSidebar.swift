@@ -1,30 +1,42 @@
 import SwiftUI
 
 struct NotebooksSidebar: View {
-    @Binding var selection: Notebook.ID?
+    @Binding var selection: SidebarItem?
     @Environment(LibraryStore.self) private var library
 
-    @State private var showNewNotebook = false
-    @State private var newNotebookName = ""
-    @State private var renaming: Notebook?
-    @State private var renameText = ""
-    @State private var deleting: Notebook?
+    @State private var action: NotebookAction?
     @State private var showSettings = false
 
     var body: some View {
         List(selection: $selection) {
-            Section("Library") {
+            Section {
+                Label("All Notebooks", systemImage: "books.vertical.fill")
+                    .tag(SidebarItem.library)
+            }
+
+            Section("Notebooks") {
                 ForEach(library.notebooks) { notebook in
-                    NotebookRow(notebook: notebook)
+                    row(notebook)
+                        .tag(SidebarItem.notebook(notebook.id))
                         .contextMenu {
                             Button {
-                                renameText = notebook.name
-                                renaming = notebook
+                                action = .rename(notebook.id)
                             } label: {
                                 Label("Rename", systemImage: "pencil")
                             }
+                            Button {
+                                action = .changeCover(notebook.id)
+                            } label: {
+                                Label("Change Cover", systemImage: "paintpalette")
+                            }
+                            Button {
+                                library.duplicateNotebook(notebook.id)
+                            } label: {
+                                Label("Duplicate", systemImage: "plus.square.on.square")
+                            }
+                            Divider()
                             Button(role: .destructive) {
-                                deleting = notebook
+                                action = .delete(notebook.id)
                             } label: {
                                 Label("Delete", systemImage: "trash")
                             }
@@ -37,8 +49,7 @@ struct NotebooksSidebar: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    newNotebookName = ""
-                    showNewNotebook = true
+                    action = .newNotebook
                 } label: {
                     Label("New Notebook", systemImage: "plus")
                 }
@@ -51,63 +62,15 @@ struct NotebooksSidebar: View {
                 }
             }
         }
-        .alert("New Notebook", isPresented: $showNewNotebook) {
-            TextField("Name", text: $newNotebookName)
-            Button("Create") {
-                let nb = library.createNotebook(named: newNotebookName)
-                selection = nb.id
-            }
-            Button("Cancel", role: .cancel) {}
-        }
-        .alert(
-            "Rename Notebook",
-            isPresented: Binding(
-                get: { renaming != nil },
-                set: { if !$0 { renaming = nil } }
-            )
-        ) {
-            TextField("Name", text: $renameText)
-            Button("Rename") {
-                if let nb = renaming {
-                    library.renameNotebook(nb.id, to: renameText)
-                }
-                renaming = nil
-            }
-            Button("Cancel", role: .cancel) { renaming = nil }
-        }
-        .confirmationDialog(
-            "Delete “\(deleting?.name ?? "")”? All of its pages will be removed.",
-            isPresented: Binding(
-                get: { deleting != nil },
-                set: { if !$0 { deleting = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("Delete Notebook", role: .destructive) {
-                if let nb = deleting {
-                    if selection == nb.id { selection = nil }
-                    library.deleteNotebook(nb.id)
-                }
-                deleting = nil
-            }
-            Button("Cancel", role: .cancel) { deleting = nil }
-        }
         .sheet(isPresented: $showSettings) {
             SettingsView()
         }
+        .notebookActions(action: $action, onNotebookCreated: { selection = .notebook($0) })
     }
-}
 
-private struct NotebookRow: View {
-    let notebook: Notebook
-
-    var body: some View {
+    private func row(_ notebook: Notebook) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: "book.closed.fill")
-                .font(.title3)
-                .foregroundStyle(.tint)
-                .frame(width: 36, height: 36)
-                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            MiniCover(notebook: notebook)
             VStack(alignment: .leading, spacing: 2) {
                 Text(notebook.name)
                     .font(.body.weight(.medium))
@@ -117,6 +80,6 @@ private struct NotebookRow: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 3)
     }
 }

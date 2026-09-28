@@ -8,7 +8,7 @@ import UIKit
 /// Layout under Documents/Notebooks/<notebook-uuid>/:
 ///   notebook.json          — Notebook manifest (encoded with ISO-8601 dates)
 ///   Pages/<page-uuid>.drawing   — PKDrawing data
-///   Thumbs/<page-uuid>.png      — page thumbnail for the gallery grid
+///   Thumbs/<page-uuid>.png      — page thumbnail (paper template + ink) for the gallery
 @MainActor
 @Observable
 final class LibraryStore {
@@ -67,13 +67,13 @@ final class LibraryStore {
     // MARK: - Notebook CRUD
 
     @discardableResult
-    func createNotebook(named name: String) -> Notebook {
+    func createNotebook(named name: String, coverColorIndex: Int = Int.random(in: 0..<CoverPalette.themes.count)) -> Notebook {
         let nb = Notebook(
             id: UUID(),
             name: name.trimmingCharacters(in: .whitespaces).isEmpty ? "Untitled Notebook" : name,
             createdAt: .now,
             updatedAt: .now,
-            pages: []
+            coverColorIndex: coverColorIndex
         )
         try? fileManager.createDirectory(at: notebookURL(nb.id), withIntermediateDirectories: true)
         notebooks.insert(nb, at: 0)
@@ -88,6 +88,43 @@ final class LibraryStore {
         persist(notebooks[idx])
     }
 
+    func setCoverColor(_ id: UUID, colorIndex: Int) {
+        guard let idx = notebooks.firstIndex(where: { $0.id == id }) else { return }
+        notebooks[idx].coverColorIndex = colorIndex
+        persist(notebooks[idx])
+    }
+
+    func setTemplate(_ id: UUID, template: PaperTemplate) {
+        guard let idx = notebooks.firstIndex(where: { $0.id == id }) else { return }
+        notebooks[idx].template = template
+        persist(notebooks[idx])
+    }
+
+    /// Copies the whole notebook directory (drawings + thumbnails included),
+    /// then rewrites the manifest with a new identity.
+    @discardableResult
+    func duplicateNotebook(_ id: UUID) -> Notebook? {
+        guard let original = notebook(id: id) else { return nil }
+        let newID = UUID()
+        do {
+            try fileManager.copyItem(at: notebookURL(id), to: notebookURL(newID))
+        } catch {
+            return nil
+        }
+        let copy = Notebook(
+            id: newID,
+            name: "\(original.name) Copy",
+            createdAt: .now,
+            updatedAt: .now,
+            coverColorIndex: original.coverColorIndex,
+            template: original.template,
+            pages: original.pages
+        )
+        persist(copy)
+        notebooks.insert(copy, at: 0)
+        return copy
+    }
+
     func deleteNotebook(_ id: UUID) {
         try? fileManager.removeItem(at: notebookURL(id))
         notebooks.removeAll { $0.id == id }
@@ -96,9 +133,10 @@ final class LibraryStore {
     // MARK: - Page CRUD
 
     @discardableResult
-    func createPage(in notebookID: UUID) -> PageInfo? {
+    func createPage(in notebookID: UUID, template: PaperTemplate? = nil) -> PageInfo? {
         guard let idx = notebooks.firstIndex(where: { $0.id == notebookID }) else { return nil }
-        let page = PageInfo(id: UUID(), createdAt: .now, updatedAt: .now)
+        let page = PageInfo(id: UUID(), createdAt: .now, updatedAt: .now,
+                            template: template ?? notebooks[idx].template)
         notebooks[idx].pages.append(page)
         notebooks[idx].updatedAt = .now
         persist(notebooks[idx])
@@ -130,7 +168,8 @@ final class LibraryStore {
         pageID: UUID,
         drawing: PKDrawing,
         pageSize: CGSize,
-        scale: CGFloat
+        scale: CGFloat,
+        template: PaperTemplate
     ) async {
         let fallback = CGSize(width: 1180, height: 820) // iPad 10.9" portrait points
         let rect = pageSize.width > 0 && pageSize.height > 0
@@ -139,7 +178,17 @@ final class LibraryStore {
 
         let payload = await Task.detached(priority: .utility) { () -> (drawing: Data, thumb: Data?) in
             let drawingData = drawing.dataRepresentation()
-            let image = drawing.image(from: rect, scale: scale == 0 ? 2 : scale)
+
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = scale == 0 ? 2 : scale
+            let renderer = UIGraphicsImageRenderer(bounds: rect, format: format)
+            let image = renderer.image { context in
+                let cg = context.cgContext
+                cg.setFillColor(PaperTheme.uiPaper.cgColor)
+                cg.fill(rect)
+                template.draw(in: cg, rect: rect, color: PaperTheme.uiLine)
+                drawing.image(from: rect, scale: format.scale).draw(in: rect)
+            }
             return (drawingData, image.pngData())
         }.value
 

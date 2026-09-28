@@ -30,18 +30,40 @@ struct PagesGrid: View {
             }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        if let page = library.createPage(in: notebookID) {
-                            path.append(page)
-                        }
-                    } label: {
-                        Label("New Page", systemImage: "plus")
-                    }
+                    newPageMenu
                 }
             }
             .navigationDestination(for: PageInfo.self) { page in
                 DrawingView(notebookID: notebookID, page: page)
             }
+        }
+    }
+
+    private var newPageMenu: some View {
+        Menu {
+            ForEach(PaperTemplate.allCases) { template in
+                Button {
+                    if let page = library.createPage(in: notebookID, template: template) {
+                        path.append(page)
+                    }
+                } label: {
+                    Label("New \(template.displayName) Page", systemImage: template.systemImage)
+                }
+            }
+            Divider()
+            Menu {
+                ForEach(PaperTemplate.allCases) { template in
+                    Button(template.displayName) {
+                        if let nb = library.notebook(id: notebookID) {
+                            library.setTemplate(nb.id, template: template)
+                        }
+                    }
+                }
+            } label: {
+                Label("Default Paper", systemImage: "doc.badge.gearshape")
+            }
+        } label: {
+            Label("New Page", systemImage: "plus")
         }
     }
 }
@@ -60,7 +82,7 @@ private struct PageCell: View {
             VStack(spacing: 10) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(Color(uiColor: .systemBackground))
+                        .fill(PaperTheme.uiPaper.color)
                         .shadow(color: .black.opacity(0.14), radius: 8, y: 4)
                     if let thumbnail {
                         Image(uiImage: thumbnail)
@@ -80,6 +102,16 @@ private struct PageCell: View {
                         .padding(6)
                         .background(.regularMaterial, in: Circle())
                         .padding(8)
+                }
+                .overlay(alignment: .topLeading) {
+                    if page.template != .plain {
+                        Image(systemName: page.template.systemImage)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .padding(6)
+                            .background(.regularMaterial, in: Circle())
+                            .padding(8)
+                    }
                 }
             }
         }
@@ -104,4 +136,8 @@ private struct PageCell: View {
             thumbnail = await library.loadThumbnail(notebookID: notebookID, pageID: page.id)
         }
     }
+}
+
+extension UIColor {
+    var color: Color { Color(self) }
 }
