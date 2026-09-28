@@ -117,23 +117,35 @@ struct GlyphCaptureView: View {
     }
 
     /// One-tap umlauts: copy the base letter's glyph and stamp two dots.
+    @ViewBuilder
     private var umlautShortcut: some View {
-        Group {
-            if let character, let base = GlyphRenderer.umlautBase(for: character) {
-                let baseDrawn = hands.hand(id: handID)?.isDone(base) ?? false
-                Button {
-                    generateFromBase(base)
-                } label: {
-                    Label(
-                        baseDrawn ? "Auto-build from “\(base)”" : "Draw “\(base)” first to auto-build",
-                        systemImage: "wand.and.stars"
-                    )
-                    .font(.callout)
+        if let character, let base = GlyphRenderer.umlautBase(for: character) {
+            let baseDrawn = hands.hand(id: handID)?.isDone(base) ?? false
+            let label = Label(
+                baseDrawn ? "Auto-build from “\(base)”" : "Draw “\(base)” first to auto-build",
+                systemImage: "wand.and.stars"
+            )
+            Group {
+                if baseDrawn {
+                    Button {
+                        generateFromBase(base)
+                    } label: {
+                        label
+                            .font(.callout.weight(.semibold))
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else {
+                    Button {
+                        generateFromBase(base)
+                    } label: {
+                        label
+                            .font(.callout)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(true)
                 }
-                .buttonStyle(baseDrawn ? .borderedProminent : .bordered)
-                .disabled(!baseDrawn)
-                .padding(.bottom, 4)
             }
+            .padding(.bottom, 4)
         }
     }
 

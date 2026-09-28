@@ -14,7 +14,7 @@ final class HandStore {
 
     private let fileManager = FileManager.default
     private let thumbCache = NSCache<NSString, UIImage>()
-    private let glyphCache = NSCache<NSString, PKDrawing>()
+    private var glyphCache: [String: PKDrawing] = [:]
 
     // MARK: - Paths
 
@@ -94,15 +94,15 @@ final class HandStore {
     // MARK: - Glyphs
 
     func glyphDrawing(handID: UUID, character: String) async -> PKDrawing? {
-        let key = "\(handID.uuidString)-\(character)" as NSString
-        if let cached = glyphCache.object(forKey: key) { return cached }
+        let key = "\(handID.uuidString)-\(character)"
+        if let cached = glyphCache[key] { return cached }
         let url = glyphURL(handID, character)
-        let drawing = await Task.detached(priority: .userInitiated) {
+        let drawing = await Task.detached(priority: .userInitiated) { () -> PKDrawing? in
             guard let data = try? Data(contentsOf: url) else { return nil }
             return try? PKDrawing(data: data)
         }.value
         if let drawing {
-            glyphCache.setObject(drawing, forKey: key)
+            glyphCache[key] = drawing
         }
         return drawing
     }
@@ -134,7 +134,7 @@ final class HandStore {
         try? fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let data = await Task.detached(priority: .utility) { drawing.dataRepresentation() }.value
         try? data.write(to: url, options: .atomic)
-        glyphCache.setObject(drawing, forKey: "\(handID.uuidString)-\(character)" as NSString)
+        glyphCache["\(handID.uuidString)-\(character)"] = drawing
         thumbCache.removeObject(forKey: "\(handID.uuidString)-\(character)" as NSString)
 
         if let idx = hands.firstIndex(where: { $0.id == handID }) {
@@ -154,7 +154,7 @@ final class HandStore {
         }
         hands[idx].doneCharacters.removeAll { $0 == character }
         try? fileManager.removeItem(at: glyphURL(handID, character))
-        glyphCache.removeObject(forKey: "\(handID.uuidString)-\(character)" as NSString)
+        glyphCache["\(handID.uuidString)-\(character)"] = nil
         hands[idx].updatedAt = .now
         persist(hands[idx])
     }

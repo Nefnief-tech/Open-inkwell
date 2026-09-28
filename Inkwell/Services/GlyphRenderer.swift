@@ -105,13 +105,10 @@ enum GlyphRenderer {
             y: baseline - baselineY * k
         ).scaledBy(x: k, y: k)
         for stroke in glyph.strokes {
-            let transformed = stroke.transformed(using: t)
-            if let inkColor {
-                strokes.append(PKStroke(path: transformed.path,
-                                        ink: PKInk(transformed.ink.inkType, color: inkColor)))
-            } else {
-                strokes.append(transformed)
-            }
+            // Transforms live on PKStroke — concatenate onto its own.
+            let totalTransform = stroke.transform.concatenating(t)
+            let ink = inkColor.map { PKInk(stroke.ink.inkType, color: $0) } ?? stroke.ink
+            strokes.append(PKStroke(ink: ink, path: stroke.path, transform: totalTransform))
         }
         penX += b.width * k + letterSpacing
     }
@@ -233,8 +230,10 @@ enum GlyphRenderer {
                 azimuth: 0,
                 altitude: .pi / 2
             )
-            return PKStroke(path: PKStrokePath(points: [point], creationDate: Date()),
-                            ink: PKInk(.pen, color: .black))
+            return PKStroke(
+                ink: PKInk(.pen, color: .black),
+                path: PKStrokePath(controlPoints: [point], creationDate: Date())
+            )
         }
 
         return PKDrawing(strokes: drawing.strokes + [

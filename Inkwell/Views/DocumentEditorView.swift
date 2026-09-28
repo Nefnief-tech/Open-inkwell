@@ -270,28 +270,29 @@ struct DocumentEditorView: View {
         let composed = GlyphRenderer.compose(text: doc.text, glyphs: glyphs, settings: composeSettings(doc, ink: ink))
         let bgImage = doc.usesBackgroundImage ? background : nil
         let name = doc.name.replacingOccurrences(of: "/", with: "-")
-        Task.detached(priority: .userInitiated) {
-            var url: URL?
-            if asPDF {
-                let data = GlyphRenderer.renderPDF(size: size, background: bgImage,
-                                                   template: doc.template, composed: composed)
-                url = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("\(name).pdf")
-                try? data.write(to: url!)
-            } else {
-                let image = GlyphRenderer.renderPage(size: size, scale: scale,
-                                                     background: bgImage, template: doc.template,
-                                                     composed: composed)
-                url = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("\(name).png")
-                try? image.pngData()?.write(to: url!)
-            }
-            await MainActor.run {
-                isExporting = false
-                if let url {
-                    shareURL = url
-                    showShare = true
+        Task {
+            let url: URL? = await Task.detached(priority: .userInitiated) { () -> URL? in
+                let url: URL
+                if asPDF {
+                    let data = GlyphRenderer.renderPDF(size: size, background: bgImage,
+                                                       template: doc.template, composed: composed)
+                    url = FileManager.default.temporaryDirectory
+                        .appendingPathComponent("\(name).pdf")
+                    try? data.write(to: url, options: .atomic)
+                } else {
+                    let image = GlyphRenderer.renderPage(size: size, scale: scale,
+                                                         background: bgImage, template: doc.template,
+                                                         composed: composed)
+                    url = FileManager.default.temporaryDirectory
+                        .appendingPathComponent("\(name).png")
+                    try? image.pngData()?.write(to: url, options: .atomic)
                 }
+                return url
+            }.value
+            isExporting = false
+            if let url {
+                shareURL = url
+                showShare = true
             }
         }
     }

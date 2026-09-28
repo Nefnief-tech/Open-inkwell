@@ -55,7 +55,7 @@ enum CharsetGroup: String, CaseIterable, Identifiable, Hashable {
 
 /// A user handwriting ("hand"): metadata + which characters are drawn/skipped.
 /// Glyph stroke data lives in `glyphs/<unicode-hex>.drawing` next to hand.json.
-struct HandwritingSet: Identifiable, Hashable {
+struct HandwritingSet: Identifiable, Hashable, Codable {
     let id: UUID
     var name: String
     var createdAt: Date
@@ -72,7 +72,7 @@ struct HandwritingSet: Identifiable, Hashable {
 }
 
 /// A rendered output: typed text in a chosen hand, on a background.
-struct HandDocument: Identifiable, Hashable {
+struct HandDocument: Identifiable, Hashable, Codable {
     let id: UUID
     var name: String
     var handID: UUID
