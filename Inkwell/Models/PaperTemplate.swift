@@ -1,8 +1,10 @@
 import UIKit
 
 /// Paper templates rendered as a background layer under the drawing.
-enum PaperTemplate: String, Codable, CaseIterable, Hashable {
+enum PaperTemplate: String, Codable, CaseIterable, Hashable, Identifiable {
     case plain, lined, grid, dots
+
+    var id: String { rawValue }
 
     var displayName: String {
         switch self {

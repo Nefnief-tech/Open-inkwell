@@ -2,15 +2,16 @@ import Foundation
 
 /// A notebook holds an ordered list of pages, plus its cover appearance and
 /// default paper template. Custom Codable so files written by older versions
-/// (before covers/templates) still decode with sensible defaults.
+/// (before covers/templates) still decode with sensible defaults. Property
+/// defaults double as memberwise-init defaults.
 struct Notebook: Identifiable, Hashable {
     let id: UUID
     var name: String
     var createdAt: Date
     var updatedAt: Date
-    var coverColorIndex: Int
-    var template: PaperTemplate
-    var pages: [PageInfo]
+    var coverColorIndex: Int = 0
+    var template: PaperTemplate = .plain
+    var pages: [PageInfo] = []
 }
 
 /// Metadata for a single page. Stroke data lives in `Pages/<id>.drawing`,
@@ -19,23 +20,12 @@ struct PageInfo: Identifiable, Hashable {
     let id: UUID
     var createdAt: Date
     var updatedAt: Date
-    var template: PaperTemplate
+    var template: PaperTemplate = .plain
 }
 
 extension Notebook: Codable {
     private enum CodingKeys: String, CodingKey {
         case id, name, createdAt, updatedAt, coverColorIndex, template, pages
-    }
-
-    init(id: UUID, name: String, createdAt: Date, updatedAt: Date,
-         coverColorIndex: Int = 0, template: PaperTemplate = .plain, pages: [PageInfo] = []) {
-        self.id = id
-        self.name = name
-        self.createdAt = createdAt
-        self.updatedAt = updatedAt
-        self.coverColorIndex = coverColorIndex
-        self.template = template
-        self.pages = pages
     }
 
     init(from decoder: Decoder) throws {
@@ -53,13 +43,6 @@ extension Notebook: Codable {
 extension PageInfo: Codable {
     private enum CodingKeys: String, CodingKey {
         case id, createdAt, updatedAt, template
-    }
-
-    init(id: UUID, createdAt: Date, updatedAt: Date, template: PaperTemplate = .plain) {
-        self.id = id
-        self.createdAt = createdAt
-        self.updatedAt = updatedAt
-        self.template = template
     }
 
     init(from decoder: Decoder) throws {

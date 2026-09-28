@@ -191,7 +191,7 @@ private struct PencilCanvasView: UIViewRepresentable {
 
         context.coordinator.lastAppliedEditVersion = editVersion
         context.coordinator.lastAppliedToolConfig = toolConfig
-        context.controller.canvas = view
+        controller.canvas = view
         view.tool = toolConfig.pkTool
         view.drawing = drawing
         return view
