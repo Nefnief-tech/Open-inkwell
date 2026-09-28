@@ -2,12 +2,14 @@ import SwiftUI
 
 @main
 struct InkwellApp: App {
-    @State private var library = LibraryStore()
+    @State private var hands = HandStore()
+    @State private var documents = DocumentStore()
 
     var body: some Scene {
         WindowGroup {
             RootView()
-                .environment(library)
+                .environment(hands)
+                .environment(documents)
         }
     }
 }

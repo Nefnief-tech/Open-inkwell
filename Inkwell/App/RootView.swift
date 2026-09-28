@@ -1,24 +1,47 @@
 import SwiftUI
 
-/// Sidebar selection: the library grid, or a specific notebook.
-enum SidebarItem: Hashable {
-    case library
-    case notebook(UUID)
+/// Sidebar sections: capture handwriting sets, or create rendered documents.
+enum SidebarSection: Hashable {
+    case hands
+    case documents
 }
 
 struct RootView: View {
-    @Environment(LibraryStore.self) private var library
-    @State private var selection: SidebarItem? = .library
+    @State private var selection: SidebarSection? = .hands
+    @State private var showSettings = false
 
     var body: some View {
         NavigationSplitView {
-            NotebooksSidebar(selection: $selection)
+            List(selection: $selection) {
+                Section {
+                    Label("My Hands", systemImage: "hand.draw")
+                        .tag(SidebarSection.hands)
+                    Label("Documents", systemImage: "doc.on.doc")
+                        .tag(SidebarSection.documents)
+                } footer: {
+                    Text("Capture your handwriting once, then render any typed text in it.")
+                }
+            }
+            .listStyle(.sidebar)
+            .navigationTitle("Inkwell")
+            .toolbar {
+                ToolbarItem {
+                    Button {
+                        showSettings = true
+                    } label: {
+                        Label("Settings", systemImage: "gearshape")
+                    }
+                }
+            }
+            .sheet(isPresented: $showSettings) {
+                SettingsView()
+            }
         } detail: {
             switch selection {
-            case .notebook(let id) where library.notebook(id: id) != nil:
-                PagesGrid(notebookID: id)
+            case .documents:
+                DocumentsListView()
             default:
-                LibraryGridView(onOpen: { selection = .notebook($0) })
+                HandsListView()
             }
         }
     }
