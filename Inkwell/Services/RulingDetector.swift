@@ -92,7 +92,7 @@ enum RulingDetector {
 
         // Bitmap row 0 is the image BOTTOM (CG y-up); convert to top-origin
         // page points. Downscale factor: px → points.
-        let pxToPoint = 1.0 / scale
+        let pxToPoint = CGFloat(1.0 / scale)
         let ys = filtered.map { CGFloat(h - $0) * pxToPoint }.sorted()
         return ys
     }

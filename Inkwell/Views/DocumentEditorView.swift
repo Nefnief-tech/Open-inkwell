@@ -537,7 +537,11 @@ struct DocumentEditorView: View {
 
     private func composeSettings(_ doc: HandDocument, ink: UIColor?) -> GlyphRenderer.ComposeSettings {
         let snapping = doc.snapToRuling && doc.usesBackgroundImage
-        GlyphRenderer.ComposeSettings(
+        var ruling: [CGFloat]? = nil
+        if snapping, let values = doc.rulingBaselines {
+            ruling = values.map { CGFloat($0) }
+        }
+        return GlyphRenderer.ComposeSettings(
             lineSpacing: CGFloat(doc.lineSpacing),
             letterSpacing: CGFloat(doc.letterSpacing),
             sizeMultiplier: CGFloat(doc.sizeMultiplier),
@@ -547,7 +551,7 @@ struct DocumentEditorView: View {
             firstBaseline: CGFloat(doc.firstBaseline),
             inkColor: ink,
             variationSeed: UInt64(bitPattern: Int64(doc.variationSeed)),
-            lineBaselines: snapping ? doc.rulingBaselines.map { $0.map { CGFloat($0) } } : nil
+            lineBaselines: ruling
         )
     }
 
