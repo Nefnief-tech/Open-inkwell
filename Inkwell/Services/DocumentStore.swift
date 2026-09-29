@@ -118,6 +118,8 @@ final class DocumentStore {
             firstBaseline: doc.firstBaseline,
             variationSeed: Int.random(in: 0...Int(Int32.max)),
             layoutVersion: doc.layoutVersion,
+            snapToRuling: doc.snapToRuling,
+            rulingBaselines: doc.rulingBaselines,
             createdAt: .now,
             updatedAt: .now
         )

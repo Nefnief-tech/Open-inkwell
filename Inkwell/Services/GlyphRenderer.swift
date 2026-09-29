@@ -50,6 +50,7 @@ enum GlyphRenderer {
         var firstBaseline: CGFloat        // baseline of the first line
         var inkColor: UIColor?            // nil = keep captured colors
         var variationSeed: UInt64 = 0     // + shuffle → re-picks glyph variants
+        var lineBaselines: [CGFloat]? = nil // detected paper ruling (page points)
     }
 
     /// Builds one PKDrawing containing the whole text. Layout is strictly
@@ -115,11 +116,15 @@ enum GlyphRenderer {
             lines.append(current)
         }
 
-        // 3. Place each line absolutely by its index — the only vertical math.
+        // 3. Resolve the line grid: detected paper ruling when available
+        //    (each text line sits on its own detected line), otherwise the
+        //    uniform slider grid. Either way, placement is absolute per line.
+        let baselines = resolvedBaselines(settings)
+
         var strokes: [PKStroke] = []
         for (lineIndex, lineTokens) in lines.enumerated() {
-            let baseline = settings.firstBaseline + CGFloat(lineIndex) * settings.lineSpacing
-            if baseline > 20000 { break } // safety for absurd inputs
+            guard lineIndex < baselines.count else { break }
+            let baseline = baselines[lineIndex]
             var penX = settings.leftMargin
             for (tokenIndex, token) in lineTokens.enumerated() {
                 if tokenIndex > 0 { penX += spaceAdvance }
@@ -134,6 +139,27 @@ enum GlyphRenderer {
             }
         }
         return PKDrawing(strokes: strokes)
+    }
+
+    /// Uniform grid, or the detected ruling extrapolated beyond its last
+    /// line with the average detected spacing.
+    private static func resolvedBaselines(_ settings: ComposeSettings) -> [CGFloat] {
+        let maxLines = 200
+        if let ruling = settings.lineBaselines, ruling.count >= 2 {
+            var result = ruling
+            let average = (ruling.last! - ruling.first!) / CGFloat(ruling.count - 1)
+            while result.count < maxLines {
+                result.append(result.last! + average)
+            }
+            return result
+        }
+        var result: [CGFloat] = []
+        var baseline = settings.firstBaseline
+        for _ in 0..<maxLines {
+            result.append(baseline)
+            baseline += settings.lineSpacing
+        }
+        return result
     }
 
     private static func charAdvance(_ character: String, glyphs: [String: [PKDrawing]],

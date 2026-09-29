@@ -42,6 +42,8 @@ struct DocumentEditorView: View {
             String(doc.sizeMultiplier), String(doc.inkColorIndex),
             String(doc.leftMargin), String(doc.firstBaseline),
             String(doc.variationSeed),
+            doc.snapToRuling ? "snap" : "free",
+            (doc.rulingBaselines ?? []).map { String(Int($0)) }.joined(separator: ","),
             doc.usesBackgroundImage ? "bg" : "paper",
         ].joined(separator: "|")
     }
@@ -87,6 +89,9 @@ struct DocumentEditorView: View {
             glyphs = await hands.allGlyphs(handID: doc.handID)
             background = doc.usesBackgroundImage
                 ? await documents.loadBackground(docID: docID) : nil
+            if let bg = background, doc.rulingBaselines == nil {
+                await detectAndStoreRuling(bg)
+            }
         }
         .task(id: previewKey) {
             try? await Task.sleep(for: .milliseconds(220))
@@ -181,9 +186,7 @@ struct DocumentEditorView: View {
                             .shadow(color: .black.opacity(0.15), radius: 6, y: 3)
                     }
                     if showGuides {
-                        BaselineGuidesOverlay(lineSpacing: doc.lineSpacing,
-                                              firstBaseline: doc.firstBaseline,
-                                              scale: scale)
+                        BaselineGuidesOverlay(baselineYs: guideYs(doc, scale: scale))
                             .allowsHitTesting(false)
                     }
                     if calibrating {
@@ -199,32 +202,34 @@ struct DocumentEditorView: View {
     }
 
     /// Two draggable horizontal lines (first line + second line → spacing)
-    /// and a draggable vertical line (line start / left margin). Drag
-    /// translations are converted to page points and written straight into
-    /// the document — the preview re-renders live.
+    /// and a draggable vertical line (line start / left margin). While
+    /// snapping to detected ruling, the horizontal drags are hidden (the
+    /// paper's own lines define the grid); the line start stays draggable.
     @ViewBuilder
     private func calibrationLines(_ doc: HandDocument, rect: CGRect, scale: CGFloat) -> some View {
-        calibHorizontalLine(
-            kind: .firstBaseline,
-            y: CGFloat(doc.firstBaseline) * scale,
-            label: "1st line", color: .red,
-            containerHeight: rect.height, scale: scale,
-            currentValue: doc.firstBaseline
-        ) { start, delta in
-            guard var d = documents.document(id: docID) else { return }
-            d.firstBaseline = (start + delta).clamped(20...(pageSize(d).height - 20))
-            documents.update(d)
-        }
-        calibHorizontalLine(
-            kind: .spacing,
-            y: CGFloat(doc.firstBaseline + doc.lineSpacing) * scale,
-            label: "spacing", color: .orange,
-            containerHeight: rect.height, scale: scale,
-            currentValue: doc.lineSpacing
-        ) { start, delta in
-            guard var d = documents.document(id: docID) else { return }
-            d.lineSpacing = (start + delta).clamped(20...300)
-            documents.update(d)
+        if !isSnapping(doc) {
+            calibHorizontalLine(
+                kind: .firstBaseline,
+                y: CGFloat(doc.firstBaseline) * scale,
+                label: "1st line", color: .red,
+                containerHeight: rect.height, scale: scale,
+                currentValue: doc.firstBaseline
+            ) { start, delta in
+                guard var d = documents.document(id: docID) else { return }
+                d.firstBaseline = (start + delta).clamped(20...(pageSize(d).height - 20))
+                documents.update(d)
+            }
+            calibHorizontalLine(
+                kind: .spacing,
+                y: CGFloat(doc.firstBaseline + doc.lineSpacing) * scale,
+                label: "spacing", color: .orange,
+                containerHeight: rect.height, scale: scale,
+                currentValue: doc.lineSpacing
+            ) { start, delta in
+                guard var d = documents.document(id: docID) else { return }
+                d.lineSpacing = (start + delta).clamped(20...300)
+                documents.update(d)
+            }
         }
         calibVerticalLine(
             x: CGFloat(doc.leftMargin) * scale,
@@ -372,14 +377,39 @@ struct DocumentEditorView: View {
             }
 
             Section {
+                Toggle("Snap to paper lines", isOn: Binding(
+                    get: { doc.snapToRuling && doc.rulingBaselines != nil },
+                    set: { var d = doc; d.snapToRuling = $0; documents.update(d) }
+                ))
+                .disabled(!doc.usesBackgroundImage || doc.rulingBaselines == nil)
+
+                if doc.usesBackgroundImage {
+                    if let ruling = doc.rulingBaselines {
+                        LabeledContent("Detected ruling lines", value: "\(ruling.count)")
+                        Button {
+                            if let bg = background {
+                                Task { await detectAndStoreRuling(bg) }
+                            }
+                        } label: {
+                            Label("Re-detect Lines", systemImage: "viewfinder")
+                        }
+                    } else {
+                        Label("No ruling detected — using uniform spacing", systemImage: "questionmark.circle")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 sliderRow("Line spacing", value: Binding(
                     get: { doc.lineSpacing },
                     set: { var d = doc; d.lineSpacing = $0; documents.update(d) }
                 ), in: 20...300, format: "%.0f pt")
+                .disabled(isSnapping(doc))
                 sliderRow("First line", value: Binding(
                     get: { doc.firstBaseline },
                     set: { var d = doc; d.firstBaseline = $0; documents.update(d) }
                 ), in: 20...400, format: "%.0f pt")
+                .disabled(isSnapping(doc))
                 sliderRow("Line start", value: Binding(
                     get: { doc.leftMargin },
                     set: { var d = doc; d.leftMargin = $0; documents.update(d) }
@@ -421,7 +451,7 @@ struct DocumentEditorView: View {
             } header: {
                 Text("Fit & Style")
             } footer: {
-                Text("Text size and line spacing are independent: resizing text never moves the lines, re-spacing never resizes your writing. “Fit to Ruling” snaps the size proportionally to the current spacing. Each letter with multiple captured variations is picked randomly per occurrence.")
+                Text("Text size and line spacing are independent: resizing text never moves the lines. With a photo background, “Snap to paper lines” places every line of text on its own detected ruling line — perfect match over any number of lines, no calibration needed. “Fit to Ruling” snaps the text size proportionally to the current spacing.")
             }
 
             Section("Ink") {
@@ -467,6 +497,26 @@ struct DocumentEditorView: View {
         hands.hand(id: doc.handID)?.name ?? "hand"
     }
 
+    private func isSnapping(_ doc: HandDocument) -> Bool {
+        doc.snapToRuling && doc.usesBackgroundImage && doc.rulingBaselines != nil
+    }
+
+    /// Guide line Ys in preview screen points: detected ruling when snapping,
+    /// otherwise the uniform grid.
+    private func guideYs(_ doc: HandDocument, scale: CGFloat) -> [CGFloat] {
+        if isSnapping(doc), let ruling = doc.rulingBaselines {
+            return ruling.map { CGFloat($0) * scale }
+        }
+        let pageHeight = pageSize(doc).height
+        var ys: [CGFloat] = []
+        var y = CGFloat(doc.firstBaseline)
+        while y <= pageHeight + 1 {
+            ys.append(y * scale)
+            y += CGFloat(doc.lineSpacing)
+        }
+        return ys
+    }
+
     private func pageSize(_ doc: HandDocument) -> CGSize {
         if doc.usesBackgroundImage, let background {
             return background.size
@@ -486,6 +536,7 @@ struct DocumentEditorView: View {
     }
 
     private func composeSettings(_ doc: HandDocument, ink: UIColor?) -> GlyphRenderer.ComposeSettings {
+        let snapping = doc.snapToRuling && doc.usesBackgroundImage
         GlyphRenderer.ComposeSettings(
             lineSpacing: CGFloat(doc.lineSpacing),
             letterSpacing: CGFloat(doc.letterSpacing),
@@ -495,7 +546,8 @@ struct DocumentEditorView: View {
             leftMargin: CGFloat(doc.leftMargin),
             firstBaseline: CGFloat(doc.firstBaseline),
             inkColor: ink,
-            variationSeed: UInt64(bitPattern: Int64(doc.variationSeed))
+            variationSeed: UInt64(bitPattern: Int64(doc.variationSeed)),
+            lineBaselines: snapping ? doc.rulingBaselines.map { $0.map(CGFloat.init) } : nil
         )
     }
 
@@ -516,11 +568,26 @@ struct DocumentEditorView: View {
             if let data = try? await item.loadTransferable(type: Data.self) {
                 await documents.saveBackground(docID: docID, imageData: data)
                 background = await documents.loadBackground(docID: docID)
+                if let bg = background {
+                    await detectAndStoreRuling(bg)
+                }
             }
             if let doc = documents.document(id: docID) {
                 glyphs = await hands.allGlyphs(handID: doc.handID)
             }
             photoItem = nil
+        }
+    }
+
+    /// Finds the paper's ruling lines and enables snapping when found.
+    private func detectAndStoreRuling(_ bg: UIImage) async {
+        let lines = await Task.detached(priority: .utility) {
+            RulingDetector.detectLines(in: bg)
+        }.value
+        if var d = documents.document(id: docID) {
+            d.rulingBaselines = lines
+            if lines != nil { d.snapToRuling = true }
+            documents.update(d)
         }
     }
 
@@ -560,27 +627,20 @@ struct DocumentEditorView: View {
     }
 }
 
-/// Horizontal baseline guide lines matching the composed text layout.
-/// Drawn in page points multiplied by the preview's fit scale, so the
-/// guides sit exactly on the text baselines in the displayed image.
+/// Horizontal baseline guide lines matching the composed text layout,
+/// passed already scaled to the preview's display size.
 struct BaselineGuidesOverlay: View {
-    var lineSpacing: CGFloat
-    var firstBaseline: CGFloat
-    var scale: CGFloat = 1
+    var baselineYs: [CGFloat]
 
     var body: some View {
         GeometryReader { geo in
             Canvas { context, size in
-                let step = lineSpacing * scale
-                guard step > 1 else { return }
-                var y = firstBaseline * scale
-                while y < size.height + step {
+                for y in baselineYs where y >= -1 && y <= size.height + 1 {
                     var path = Path()
                     path.move(to: CGPoint(x: 0, y: y))
                     path.addLine(to: CGPoint(x: size.width, y: y))
                     context.stroke(path, with: .color(.red.opacity(0.35)),
                                    style: StrokeStyle(lineWidth: 1, dash: [6, 5]))
-                    y += step
                 }
             }
         }

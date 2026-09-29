@@ -114,6 +114,8 @@ struct HandDocument: Identifiable, Hashable {
     var firstBaseline: Double = 90          // baseline of the first line from top
     var variationSeed: Int = 0              // + shuffle → re-picks glyph variants
     var layoutVersion: Int = 1              // 1 = size decoupled from spacing
+    var snapToRuling: Bool = false          // place lines on detected ruling
+    var rulingBaselines: [Double]? = nil    // detected paper line positions (page points)
     var createdAt: Date
     var updatedAt: Date
 }
@@ -123,7 +125,7 @@ extension HandDocument: Codable {
         case id, name, handID, text, usesBackgroundImage, template
         case lineSpacing, letterSpacing, sizeMultiplier, inkColorIndex
         case leftMargin, firstBaseline, variationSeed, layoutVersion
-        case createdAt, updatedAt
+        case snapToRuling, rulingBaselines, createdAt, updatedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -142,6 +144,8 @@ extension HandDocument: Codable {
         firstBaseline = try c.decodeIfPresent(Double.self, forKey: .firstBaseline) ?? 90
         variationSeed = try c.decodeIfPresent(Int.self, forKey: .variationSeed) ?? 0
         layoutVersion = try c.decodeIfPresent(Int.self, forKey: .layoutVersion) ?? 0
+        snapToRuling = try c.decodeIfPresent(Bool.self, forKey: .snapToRuling) ?? false
+        rulingBaselines = try c.decodeIfPresent([Double].self, forKey: .rulingBaselines)
         createdAt = try c.decode(Date.self, forKey: .createdAt)
         updatedAt = try c.decode(Date.self, forKey: .updatedAt)
     }
