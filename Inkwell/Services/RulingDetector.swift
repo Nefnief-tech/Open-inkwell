@@ -11,12 +11,12 @@ enum RulingDetector {
         let srcW = cg.width, srcH = cg.height
         guard srcW > 40, srcH > 40 else { return nil }
 
-        // Downscale for speed: ~480 px wide grayscale.
-        let targetW = 480
+        // Downscale moderately: thin rules lose contrast if over-shrunk.
+        let targetW = 960
         let scale = Double(targetW) / Double(srcW)
         let w = targetW
         let h = max(2, Int(Double(srcH) * scale))
-        guard h > 20 else { return nil }
+        guard h > 30 else { return nil }
 
         var pixels = [UInt8](repeating: 0, count: w * h)
         guard let ctx = CGContext(
@@ -26,46 +26,72 @@ enum RulingDetector {
             space: CGColorSpaceCreateDeviceGray(),
             bitmapInfo: CGImageAlphaInfo.none.rawValue
         ) else { return nil }
-        ctx.interpolationQuality = .low
+        ctx.interpolationQuality = .medium
         ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
 
-        // Mean luminance per row, sampled over the middle 60% of columns
-        // (avoids edge shadows and binder margins).
-        var rowMeans = [Double](repeating: 0, count: h)
-        let x0 = w * 20 / 100, x1 = w * 80 / 100
+        // Per-row LOW-PERCENTILE luminance over the middle 70% of columns.
+        // A thin dark rule makes a few pixels in its row clearly dark even
+        // when interpolation dilutes it — a row mean would wash that out.
+        var rowStats = [Double](repeating: 0, count: h)
+        let x0 = w * 15 / 100, x1 = w * 85 / 100
+        var samples = [UInt8]()
+        samples.reserveCapacity((x1 - x0) / 3 + 1)
         for y in 0..<h {
-            var sum = 0
-            var n = 0
+            samples.removeAll(keepingCapacity: true)
             var x = x0
             while x < x1 {
-                sum += Int(pixels[y * w + x])
-                n += 1
-                x += 2
+                samples.append(pixels[y * w + x])
+                x += 3
             }
-            rowMeans[y] = Double(sum) / Double(max(1, n))
+            samples.sort()
+            let idx = samples.count * 12 / 100
+            rowStats[y] = Double(samples[idx])
         }
 
-        // Adaptive threshold: a row is "dark" when clearly below its
-        // neighborhood's mean, and only when the neighborhood has contrast.
-        let half = 8
-        var dark = [Bool](repeating: false, count: h)
-        for y in 0..<h {
-            let lo = max(0, y - half), hi = min(h - 1, y + half)
-            var m = 0.0
-            var mn = rowMeans[lo], mx = rowMeans[lo]
-            for yy in lo...hi {
-                m += rowMeans[yy]
-                mn = min(mn, rowMeans[yy])
-                mx = max(mx, rowMeans[yy])
+        // Two passes: strict first, relaxed fallback for faint ruling.
+        for relaxed in [false, true] {
+            if let rows = findLineRows(rowStats: rowStats, relaxed: relaxed) {
+                // Bitmap row 0 is the image BOTTOM (CG y-up); convert to
+                // top-origin page points (source pixels are points at scale 1).
+                let pxToPoint = CGFloat(1.0 / scale)
+                let ys = rows.map { CGFloat(h - $0) * pxToPoint }.sorted()
+                if ys.count >= 2 {
+                    return ys
+                }
             }
-            m /= Double(hi - lo + 1)
-            let contrast = mx - mn
-            if contrast > 10 && rowMeans[y] < m - min(9, contrast * 0.35) {
+        }
+        return nil
+    }
+
+    /// Finds center rows of horizontal dark lines. Adaptive: a row is a line
+    /// when its statistic is clearly below the neighborhood median and the
+    /// neighborhood actually has contrast.
+    private static func findLineRows(rowStats: [Double], relaxed: Bool) -> [Int]? {
+        let h = rowStats.count
+        let half = 10
+        let margin = h / 50 // ignore 2% at top/bottom (paper edges, shadows)
+        let contrastGate: Double = relaxed ? 6 : 12
+        let dipGate: Double = relaxed ? 4 : 8
+
+        var dark = [Bool](repeating: false, count: h)
+        var window = [Double]()
+        window.reserveCapacity(half * 2 + 1)
+        for y in margin..<(h - margin) {
+            window.removeAll(keepingCapacity: true)
+            for yy in max(0, y - half)...min(h - 1, y + half) {
+                window.append(rowStats[yy])
+            }
+            window.sort()
+            let p10 = Double(window[window.count * 10 / 100])
+            let p90 = Double(window[max(0, window.count * 90 / 100 - 1)])
+            let median = Double(window[window.count / 2])
+            let range = p90 - p10
+            if range > contrastGate && rowStats[y] < median - max(dipGate, range * 0.2) {
                 dark[y] = true
             }
         }
 
-        // Group consecutive dark rows into line centers.
+        // Group consecutive dark rows into line centers, merge near-duplicates.
         var centers: [Int] = []
         var y = 0
         while y < h {
@@ -78,22 +104,31 @@ enum RulingDetector {
                 y += 1
             }
         }
-
-        // Merge near-duplicates, drop edge artifacts.
         var filtered: [Int] = []
-        for c in centers where c >= 2 && c <= h - 3 {
-            if let last = filtered.last, c - last < 6 {
+        for c in centers where c >= margin && c <= h - margin {
+            if let last = filtered.last, c - last < 8 {
                 filtered[filtered.count - 1] = (filtered.last! + c) / 2
             } else {
                 filtered.append(c)
             }
         }
+        // Plausibility: at least 2 lines. Filter duplicates/outliers against
+        // the median spacing (printed content can add a stray dark row).
         guard filtered.count >= 2, filtered.count <= 200 else { return nil }
-
-        // Bitmap row 0 is the image BOTTOM (CG y-up); convert to top-origin
-        // page points. Downscale factor: px → points.
-        let pxToPoint = CGFloat(1.0 / scale)
-        let ys = filtered.map { CGFloat(h - $0) * pxToPoint }.sorted()
-        return ys
+        var spacings: [Double] = []
+        for i in 1..<filtered.count {
+            spacings.append(Double(filtered[i] - filtered[i - 1]))
+        }
+        let medianSpacing = spacings.sorted()[spacings.count / 2]
+        guard medianSpacing > 4 else { return nil }
+        var kept: [Int] = [filtered[0]]
+        for i in 1..<filtered.count {
+            let gap = Double(filtered[i] - kept.last!)
+            if gap >= medianSpacing * 0.45 {
+                kept.append(filtered[i])
+            } // too close to the previous line → merged duplicate, drop
+        }
+        guard kept.count >= 2 else { return nil }
+        return kept
     }
 }

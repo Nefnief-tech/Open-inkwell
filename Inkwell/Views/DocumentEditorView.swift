@@ -386,17 +386,17 @@ struct DocumentEditorView: View {
                 if doc.usesBackgroundImage {
                     if let ruling = doc.rulingBaselines {
                         LabeledContent("Detected ruling lines", value: "\(ruling.count)")
-                        Button {
-                            if let bg = background {
-                                Task { await detectAndStoreRuling(bg) }
-                            }
-                        } label: {
-                            Label("Re-detect Lines", systemImage: "viewfinder")
-                        }
                     } else {
                         Label("No ruling detected — using uniform spacing", systemImage: "questionmark.circle")
                             .font(.callout)
                             .foregroundStyle(.secondary)
+                    }
+                    Button {
+                        if let bg = background {
+                            Task { await detectAndStoreRuling(bg) }
+                        }
+                    } label: {
+                        Label("Re-detect Lines", systemImage: "viewfinder")
                     }
                 }
 
