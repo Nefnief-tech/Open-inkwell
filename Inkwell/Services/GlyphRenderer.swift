@@ -20,9 +20,13 @@ enum GlyphRenderer {
     static let cellWidth: CGFloat = 400        // reference width for space width
 
     /// Baseline-to-baseline distance at scale 1. Tuned so handwriting
-    /// captured at comfortable size renders at realistic print size
-    /// (x-height ≈ 1/3 of the line spacing) instead of nearly full-size.
+    /// captured at comfortable size renders at realistic print size.
     static let naturalLineAdvance: CGFloat = 480
+
+    /// Reference line spacing for "Text size = 1.0". Glyph scale is
+    /// independent of the document's line spacing — spacing only positions
+    /// baselines, size only scales strokes about them.
+    static let naturalLineSpacing: CGFloat = 90
 
     // Capture-screen metrics in absolute points, anchored to the baseline
     // guide — "write like you normally write" size.
@@ -56,7 +60,9 @@ enum GlyphRenderer {
         glyphs: [String: [PKDrawing]],
         settings: ComposeSettings
     ) -> PKDrawing {
-        let k = (settings.lineSpacing / naturalLineAdvance) * settings.sizeMultiplier
+        // Glyph scale is absolute (anchored to naturalLineSpacing), NOT tied
+        // to lineSpacing — changing spacing moves lines, never resizes text.
+        let k = (naturalLineSpacing / naturalLineAdvance) * settings.sizeMultiplier
         let spaceAdvance = CGFloat(settings.spaceWidthFraction) * cellWidth * k
         let rightMargin: CGFloat = 48
         let maxWidth = settings.pageWidth - settings.leftMargin - rightMargin

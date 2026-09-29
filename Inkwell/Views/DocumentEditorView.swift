@@ -387,21 +387,35 @@ struct DocumentEditorView: View {
                     set: { var d = doc; d.sizeMultiplier = $0; documents.update(d) }
                 ), in: 0.4...2.5, format: "%.2f×")
 
-                let xHeight = Int((GlyphRenderer.xHeightSpan * doc.lineSpacing
-                                   / GlyphRenderer.naturalLineAdvance * doc.sizeMultiplier).rounded())
+                // Exact now: glyph scale no longer depends on line spacing.
+                let xHeight = Int((GlyphRenderer.xHeightSpan
+                                   * (GlyphRenderer.naturalLineSpacing / GlyphRenderer.naturalLineAdvance)
+                                   * doc.sizeMultiplier).rounded())
                 LabeledContent("Resulting x-height", value: "≈ \(xHeight) pt")
 
-                Button {
-                    var d = doc
-                    d.variationSeed = Int.random(in: 0...Int(Int32.max))
-                    documents.update(d)
-                } label: {
-                    Label("Shuffle Letter Variations", systemImage: "shuffle")
+                HStack {
+                    Button {
+                        var d = doc
+                        d.sizeMultiplier = min(2.5, max(0.4,
+                            d.sizeMultiplier * (d.lineSpacing / GlyphRenderer.naturalLineSpacing)))
+                        documents.update(d)
+                    } label: {
+                        Label("Fit to Ruling", systemImage: "arrow.down.forward.and.arrow.up.backward")
+                    }
+                    .buttonStyle(.bordered)
+                    Button {
+                        var d = doc
+                        d.variationSeed = Int.random(in: 0...Int(Int32.max))
+                        documents.update(d)
+                    } label: {
+                        Label("Shuffle Variations", systemImage: "shuffle")
+                    }
+                    .buttonStyle(.bordered)
                 }
             } header: {
                 Text("Fit & Style")
             } footer: {
-                Text("x-height is what your lowercase letters measure on the page. Each letter with multiple captured variations is picked randomly per occurrence.")
+                Text("Text size and line spacing are independent: resizing text never moves the lines, re-spacing never resizes your writing. “Fit to Ruling” snaps the size proportionally to the current spacing. Each letter with multiple captured variations is picked randomly per occurrence.")
             }
 
             Section("Ink") {

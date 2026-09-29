@@ -23,7 +23,7 @@ struct SettingsView: View {
                 }
 
                 Section("About") {
-                    LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.5.0")
+                    LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.6.0")
                     LabeledContent("Storage", value: "On device (Documents)")
                 }
             }

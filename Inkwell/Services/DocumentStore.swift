@@ -48,7 +48,15 @@ final class DocumentStore {
         var found: [HandDocument] = []
         for dir in dirs where dir.hasDirectoryPath {
             guard let data = try? Data(contentsOf: dir.appending(path: "doc.json")),
-                  let doc = try? JSONDecoder.iso.decode(HandDocument.self, from: data) else { continue }
+                  var doc = try? JSONDecoder.iso.decode(HandDocument.self, from: data) else { continue }
+            // One-time migration: text size used to be coupled to line
+            // spacing. Fold the old coupling into sizeMultiplier so the
+            // rendered look is preserved, then mark as migrated.
+            if doc.layoutVersion == 0 {
+                doc.sizeMultiplier *= doc.lineSpacing / GlyphRenderer.naturalLineSpacing
+                doc.layoutVersion = 1
+                persist(doc)
+            }
             found.append(doc)
         }
         documents = found.sorted { $0.updatedAt > $1.updatedAt }
@@ -109,6 +117,7 @@ final class DocumentStore {
             leftMargin: doc.leftMargin,
             firstBaseline: doc.firstBaseline,
             variationSeed: Int.random(in: 0...Int(Int32.max)),
+            layoutVersion: doc.layoutVersion,
             createdAt: .now,
             updatedAt: .now
         )
