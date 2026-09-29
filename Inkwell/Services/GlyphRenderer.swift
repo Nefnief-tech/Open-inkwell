@@ -52,9 +52,12 @@ enum GlyphRenderer {
         var variationSeed: UInt64 = 0     // + shuffle → re-picks glyph variants
     }
 
-    /// Builds one PKDrawing containing the whole text laid out on the line
-    /// grid. Undrawn characters are omitted; each occurrence draws a randomly
-    /// (but deterministically) picked variation of its glyph.
+    /// Builds one PKDrawing containing the whole text. Layout is strictly
+    /// per-line: every line's baseline is computed absolutely from its index
+    /// (`firstBaseline + index * lineSpacing`) with no accumulated vertical
+    /// state — glyph scale and line positions are independent by construction.
+    /// Undrawn characters are omitted; each occurrence draws a randomly (but
+    /// deterministically) picked variation of its glyph.
     static func compose(
         text: String,
         glyphs: [String: [PKDrawing]],
@@ -67,27 +70,60 @@ enum GlyphRenderer {
         let rightMargin: CGFloat = 48
         let maxWidth = settings.pageWidth - settings.leftMargin - rightMargin
 
-        var strokes: [PKStroke] = []
-        var baseline = settings.firstBaseline
-
+        // 1. Tokenize per paragraph: words, with oversized words split into
+        //    character chunks that fit a single line.
+        var paragraphs: [[String]] = []
         for paragraph in text.components(separatedBy: "\n") {
-            var penX = settings.leftMargin
-            var lineIsEmpty = true
-
-            let words = paragraph.split(separator: " ", omittingEmptySubsequences: false)
-            for word in words {
-                let wordWidth = width(of: String(word), glyphs: glyphs, k: k,
-                                      letterSpacing: settings.letterSpacing)
-                if !lineIsEmpty && penX + spaceAdvance + wordWidth > maxWidth + 0.5 {
-                    // wrap to next line
-                    baseline += settings.lineSpacing
-                    penX = settings.leftMargin
-                    lineIsEmpty = true
-                }
-                if !lineIsEmpty {
-                    penX += spaceAdvance
-                }
+            var paragraphTokens: [String] = []
+            for word in paragraph.split(separator: " ").map(String.init) {
+                var chunk = ""
+                var chunkWidth: CGFloat = 0
                 for ch in word {
+                    let advance = charAdvance(String(ch), glyphs: glyphs, k: k,
+                                              letterSpacing: settings.letterSpacing)
+                    if !chunk.isEmpty && chunkWidth + advance > maxWidth + 0.5 {
+                        paragraphTokens.append(chunk)
+                        chunk = ""
+                        chunkWidth = 0
+                    }
+                    chunk += String(ch)
+                    chunkWidth += advance
+                }
+                if !chunk.isEmpty { paragraphTokens.append(chunk) }
+            }
+            paragraphs.append(paragraphTokens)
+        }
+
+        // 2. Word-wrap the tokens into display lines.
+        var lines: [[String]] = []
+        for paragraphTokens in paragraphs {
+            var current: [String] = []
+            var currentWidth: CGFloat = 0
+            for token in paragraphTokens {
+                let w = width(of: token, glyphs: glyphs, k: k,
+                              letterSpacing: settings.letterSpacing)
+                let needed = current.isEmpty ? w : currentWidth + spaceAdvance + w
+                if !current.isEmpty && needed > maxWidth + 0.5 {
+                    lines.append(current)
+                    current = []
+                    currentWidth = 0
+                }
+                if !current.isEmpty { currentWidth += spaceAdvance }
+                current.append(token)
+                currentWidth += w
+            }
+            lines.append(current)
+        }
+
+        // 3. Place each line absolutely by its index — the only vertical math.
+        var strokes: [PKStroke] = []
+        for (lineIndex, lineTokens) in lines.enumerated() {
+            let baseline = settings.firstBaseline + CGFloat(lineIndex) * settings.lineSpacing
+            if baseline > 20000 { break } // safety for absurd inputs
+            var penX = settings.leftMargin
+            for (tokenIndex, token) in lineTokens.enumerated() {
+                if tokenIndex > 0 { penX += spaceAdvance }
+                for ch in token {
                     append(String(ch), glyphs: glyphs, k: k,
                            letterSpacing: settings.letterSpacing,
                            penX: &penX, baseline: baseline,
@@ -95,17 +131,15 @@ enum GlyphRenderer {
                            variationSeed: settings.variationSeed,
                            strokes: &strokes)
                 }
-                lineIsEmpty = false
-                // hard-break a single word that can't fit on a line at all
-                if penX > settings.pageWidth - rightMargin {
-                    baseline += settings.lineSpacing
-                    penX = settings.leftMargin
-                }
             }
-            baseline += settings.lineSpacing
-            if baseline > 20000 { break } // safety for absurd inputs
         }
         return PKDrawing(strokes: strokes)
+    }
+
+    private static func charAdvance(_ character: String, glyphs: [String: [PKDrawing]],
+                                    k: CGFloat, letterSpacing: CGFloat) -> CGFloat {
+        guard let variants = glyphs[character], let first = variants.first else { return 0 }
+        return first.bounds.width * k + letterSpacing
     }
 
     /// Deterministic per-occurrence variant pick: stable across preview

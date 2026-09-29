@@ -149,9 +149,14 @@ struct DocumentEditorView: View {
     private func previewPane(_ doc: HandDocument) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                Text(glyphs.isEmpty ? "Capture characters in “\(handName(doc))” first" : "Preview")
+                let oldGeometry = hands.hand(id: doc.handID)?.geometryVersion == 0
+                Text(glyphs.isEmpty
+                     ? "Capture characters in “\(handName(doc))” first"
+                     : oldGeometry
+                       ? "⚠︎ Old capture geometry — recapture this hand in My Hands or lines won't match"
+                       : "Preview")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(oldGeometry ? .orange : .secondary)
                 Spacer()
                 Toggle("Align", isOn: $calibrating.animation())
                     .toggleStyle(.button)
