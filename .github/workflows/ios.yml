@@ -17,6 +17,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Cache OpenCV
+        id: cvcache
+        uses: actions/cache@v4
+        with:
+          path: Vendor
+          key: opencv-4.10.0-ios-framework
+
+      - name: Fetch OpenCV
+        if: steps.cvcache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p Vendor
+          curl -sL -o /tmp/opencv.zip https://github.com/opencv/opencv/releases/download/4.10.0/opencv-4.10.0-ios-framework.zip
+          unzip -q /tmp/opencv.zip -d Vendor
+          ls Vendor/opencv2.framework | head -5
+
       - name: Install XcodeGen
         run: brew install xcodegen
 

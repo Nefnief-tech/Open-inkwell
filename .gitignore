@@ -19,3 +19,6 @@ xcuserdata/
 
 # Local tool state
 .mimosa/
+
+# OpenCV fetched by CI
+Vendor/

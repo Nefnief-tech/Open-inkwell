@@ -1,12 +1,21 @@
 import UIKit
 
-/// Detects horizontal ruling lines in a paper photo so text lines can be
-/// snapped to the paper's actual lines (photos have perspective — a single
-/// uniform spacing can't follow the real ruling over many lines).
+/// Ruling line detection for paper photos. Primary: OpenCV probabilistic
+/// Hough (robust against tilt, page content, faint lines). Fallback: the
+/// row-profile percentile scan.
 enum RulingDetector {
     /// Returns detected line y-positions in the image's point coordinates
     /// (top-origin), or nil when no plausible ruling was found.
     static func detectLines(in image: UIImage) -> [CGFloat]? {
+        let hough = RulingDetectorOC.detectRulingLines(in: image) ?? []
+        if hough.count >= 2 {
+            return hough.map { CGFloat($0.doubleValue) }
+        }
+        return detectWithRowProfile(in: image)
+    }
+
+    /// Row-profile percentile fallback.
+    private static func detectWithRowProfile(in image: UIImage) -> [CGFloat]? {
         guard let cg = image.cgImage else { return nil }
         let srcW = cg.width, srcH = cg.height
         guard srcW > 40, srcH > 40 else { return nil }
