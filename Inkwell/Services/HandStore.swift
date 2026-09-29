@@ -142,8 +142,12 @@ final class HandStore {
 
     /// Saves one variant of a captured glyph (already normalized to cell
     /// coordinates). Variant 0 marks the character done; higher variants are
-    /// additions.
+    /// additions. Hands captured before the baseline-anchoring fix are reset
+    /// automatically on the first new capture so baselines never mix.
     func saveGlyph(handID: UUID, character: String, variant: Int, drawing: PKDrawing) async {
+        if let h = hand(id: handID), h.geometryVersion == 0 {
+            resetGlyphs(handID)
+        }
         let url = glyphURL(handID, character, variant: variant)
         try? fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let data = await Task.detached(priority: .utility) { drawing.dataRepresentation() }.value
@@ -178,6 +182,22 @@ final class HandStore {
             hands[idx].variantCounts[character] = remaining
         }
         hands[idx].updatedAt = .now
+        persist(hands[idx])
+    }
+
+    /// Deletes every captured glyph of a hand (all variants) and marks the
+    /// hand as using the current capture geometry.
+    func resetGlyphs(_ id: UUID) {
+        guard let idx = hands.firstIndex(where: { $0.id == id }) else { return }
+        try? fileManager.removeItem(at: handURL(id).appending(path: "glyphs"))
+        try? fileManager.createDirectory(at: handURL(id).appending(path: "glyphs"),
+                                         withIntermediateDirectories: true)
+        hands[idx].doneCharacters = []
+        hands[idx].skippedCharacters = []
+        hands[idx].variantCounts = [:]
+        hands[idx].geometryVersion = 1
+        hands[idx].updatedAt = .now
+        glyphCache = glyphCache.filter { !$0.key.hasPrefix("\(id.uuidString)-") }
         persist(hands[idx])
     }
 

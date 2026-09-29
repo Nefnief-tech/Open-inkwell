@@ -66,6 +66,7 @@ struct HandwritingSet: Identifiable, Hashable {
     var doneCharacters: [String] = []
     var skippedCharacters: [String] = []
     var variantCounts: [String: Int] = [:] // per character; defaults to 1 when done
+    var geometryVersion: Int = 1           // 0 = captured before baseline anchoring fix
 
     var doneCount: Int { doneCharacters.count }
     var totalCount: Int { CharsetGroup.allCharacters.count }
@@ -80,7 +81,7 @@ struct HandwritingSet: Identifiable, Hashable {
 extension HandwritingSet: Codable {
     private enum CodingKeys: String, CodingKey {
         case id, name, createdAt, updatedAt, spaceWidth
-        case doneCharacters, skippedCharacters, variantCounts
+        case doneCharacters, skippedCharacters, variantCounts, geometryVersion
     }
 
     init(from decoder: Decoder) throws {
@@ -93,6 +94,7 @@ extension HandwritingSet: Codable {
         doneCharacters = try c.decodeIfPresent([String].self, forKey: .doneCharacters) ?? []
         skippedCharacters = try c.decodeIfPresent([String].self, forKey: .skippedCharacters) ?? []
         variantCounts = try c.decodeIfPresent([String: Int].self, forKey: .variantCounts) ?? [:]
+        geometryVersion = try c.decodeIfPresent(Int.self, forKey: .geometryVersion) ?? 0
     }
 }
 

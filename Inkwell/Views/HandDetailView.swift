@@ -28,6 +28,9 @@ struct HandDetailView: View {
     private func content(_ hand: HandwritingSet) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                if hand.geometryVersion == 0 && hand.doneCount > 0 {
+                    migrationBanner(hand)
+                }
                 progressHeader(hand)
                 ForEach(CharsetGroup.allCases) { group in
                     groupSection(group, hand: hand)
@@ -76,6 +79,26 @@ struct HandDetailView: View {
                 dismiss()
             }
         }
+    }
+
+    /// Old captures predate the baseline-anchoring fix and sit on the wrong
+    /// baseline — offer a one-tap reset so the hand can be recaptured.
+    private func migrationBanner(_ hand: HandwritingSet) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Capture geometry was fixed in this version — existing characters sit on the wrong baseline and must be recaptured.",
+                  systemImage: "exclamationmark.triangle.fill")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.orange)
+            Button {
+                hands.resetGlyphs(handID)
+            } label: {
+                Label("Reset & Recapture (\(hand.doneCount) characters)", systemImage: "arrow.counterclockwise")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding(14)
+        .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private func progressHeader(_ hand: HandwritingSet) -> some View {

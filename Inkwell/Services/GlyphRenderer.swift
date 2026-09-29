@@ -214,14 +214,19 @@ enum GlyphRenderer {
 
     // MARK: - Glyph helpers
 
-    /// Normalizes a capture-canvas drawing into cell coordinates. Guides are
-    /// at absolute point offsets from the baseline, so the scale factor is
-    /// constant — the baseline always lands exactly on `baselineY`.
-    static func normalize(_ drawing: PKDrawing) -> PKDrawing {
+    /// Normalizes a capture-canvas drawing into cell coordinates: scales by
+    /// the x-height ratio AND translates so the capture baseline (a known
+    /// fraction of the canvas height) lands exactly on `baselineY`. Without
+    /// the translation every glyph would carry a large downward offset that
+    /// grows with the render scale.
+    static func normalize(_ drawing: PKDrawing, captureHeight: CGFloat) -> PKDrawing {
         guard !drawing.strokes.isEmpty else { return drawing }
-        return drawing.transformed(
-            using: CGAffineTransform(scaleX: captureScale, y: captureScale)
-        )
+        let height = captureHeight > 0 ? captureHeight : 1000
+        let baselineScreen = height * captureBaselineFraction
+        let t = CGAffineTransform(translationX: 0, y: baselineY)
+            .scaledBy(x: captureScale, y: captureScale)
+            .translatedBy(x: 0, y: -baselineScreen)
+        return drawing.transformed(using: t)
     }
 
     /// Small preview image of a single glyph (for the progress grid).

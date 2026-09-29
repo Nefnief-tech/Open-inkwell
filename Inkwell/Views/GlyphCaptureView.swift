@@ -24,6 +24,7 @@ struct GlyphCaptureView: View {
     @State private var isSaving = false
     @State private var editingVariant = 0
     @State private var pendingNewVariant = false
+    @State private var canvasHeight: CGFloat = 0
 
     private var character: String? {
         guard let index, characters.indices.contains(index) else { return nil }
@@ -52,17 +53,23 @@ struct GlyphCaptureView: View {
     var body: some View {
         NavigationStack {
             ZStack(alignment: .bottom) {
-                ZStack {
-                    GuideOverlay()
-                    ReferenceGlyphView(character: character ?? " ")
-                    PencilCanvasView(
-                        drawing: drawing,
-                        editVersion: editVersion,
-                        toolConfig: toolBinding.wrappedValue,
-                        fingerDrawing: fingerDrawing,
-                        controller: controller,
-                        onDrawingChanged: { drawing = $0 }
-                    )
+                GeometryReader { geo in
+                    ZStack {
+                        GuideOverlay()
+                        ReferenceGlyphView(character: character ?? " ")
+                        PencilCanvasView(
+                            drawing: drawing,
+                            editVersion: editVersion,
+                            toolConfig: toolBinding.wrappedValue,
+                            fingerDrawing: fingerDrawing,
+                            controller: controller,
+                            onDrawingChanged: { drawing = $0 }
+                        )
+                    }
+                    .onAppear { canvasHeight = geo.size.height }
+                    .onChange(of: geo.size) { _, size in
+                        canvasHeight = size.height
+                    }
                 }
                 .ignoresSafeArea(edges: .bottom)
 
@@ -240,7 +247,7 @@ struct GlyphCaptureView: View {
     private func saveAndAdvance() {
         guard let character else { return }
         isSaving = true
-        let normalized = GlyphRenderer.normalize(drawing)
+        let normalized = GlyphRenderer.normalize(drawing, captureHeight: canvasHeight)
         let variant = pendingNewVariant ? variantCount : editingVariant
         let handID = self.handID
         let store = hands
