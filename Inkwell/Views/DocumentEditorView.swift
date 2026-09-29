@@ -547,7 +547,7 @@ struct DocumentEditorView: View {
             firstBaseline: CGFloat(doc.firstBaseline),
             inkColor: ink,
             variationSeed: UInt64(bitPattern: Int64(doc.variationSeed)),
-            lineBaselines: snapping ? doc.rulingBaselines.map { $0.map(CGFloat.init) } : nil
+            lineBaselines: snapping ? doc.rulingBaselines.map { $0.map { CGFloat($0) } } : nil
         )
     }
 
@@ -585,7 +585,7 @@ struct DocumentEditorView: View {
             RulingDetector.detectLines(in: bg)
         }.value
         if var d = documents.document(id: docID) {
-            d.rulingBaselines = lines
+            d.rulingBaselines = lines.map { $0.map { Double($0) } }
             if lines != nil { d.snapToRuling = true }
             documents.update(d)
         }
