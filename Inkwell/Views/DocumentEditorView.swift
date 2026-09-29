@@ -177,7 +177,8 @@ struct DocumentEditorView: View {
                     }
                     if showGuides {
                         BaselineGuidesOverlay(lineSpacing: doc.lineSpacing,
-                                              firstBaseline: doc.firstBaseline)
+                                              firstBaseline: doc.firstBaseline,
+                                              scale: scale)
                             .allowsHitTesting(false)
                     }
                     if calibrating {
@@ -555,21 +556,26 @@ struct DocumentEditorView: View {
 }
 
 /// Horizontal baseline guide lines matching the composed text layout.
+/// Drawn in page points multiplied by the preview's fit scale, so the
+/// guides sit exactly on the text baselines in the displayed image.
 struct BaselineGuidesOverlay: View {
     var lineSpacing: CGFloat
     var firstBaseline: CGFloat
+    var scale: CGFloat = 1
 
     var body: some View {
         GeometryReader { geo in
             Canvas { context, size in
-                var y = firstBaseline
-                while y < size.height {
+                let step = lineSpacing * scale
+                guard step > 1 else { return }
+                var y = firstBaseline * scale
+                while y < size.height + step {
                     var path = Path()
                     path.move(to: CGPoint(x: 0, y: y))
                     path.addLine(to: CGPoint(x: size.width, y: y))
                     context.stroke(path, with: .color(.red.opacity(0.35)),
                                    style: StrokeStyle(lineWidth: 1, dash: [6, 5]))
-                    y += lineSpacing
+                    y += step
                 }
             }
         }
